@@ -28,12 +28,6 @@ with the [Glossary](docs/GLOSSARY.md), which defines every term the engine uses.
 design, and its ~168 functional inputs (plus 90 colour controls) exist because
 something needed tuning.
 
----
-
-## Screenshot
-
-> _Add a chart screenshot to `docs/images/chart.png`, then replace this block with:_
-> `![Chart](docs/images/chart.png)`
 
 ---
 
