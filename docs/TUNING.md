@@ -162,7 +162,8 @@ signals.
 
 ## Timeframe presets
 
-Starting points, not gospel. Tune the threshold from `best` in every case.
+Starting points, not gospel. Tune the threshold from `best` in every case. For four specific
+instruments with per-market reasoning, see [PRESETS.md](PRESETS.md).
 
 ### Scalping — 1m to 5m
 

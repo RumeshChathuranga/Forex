@@ -25,7 +25,8 @@ automated. It assumes you know what an order block and a liquidity sweep are —
 with the [Glossary](docs/GLOSSARY.md), which defines every term the engine uses.
 
 **Who it isn't for.** Anyone looking for a beginner's buy/sell arrow indicator. It fires rarely by
-design and every one of its ~170 inputs exists because something needed tuning.
+design, and its ~168 functional inputs (plus 90 colour controls) exist because
+something needed tuning.
 
 ---
 
@@ -69,7 +70,8 @@ else works on any timeframe.
 ## Quick start
 
 Four settings matter on day one. Leave the rest alone until you have read
-[SETTINGS.md](docs/SETTINGS.md).
+[SETTINGS.md](docs/SETTINGS.md). For a per-instrument starting point, see
+[PRESETS.md](docs/PRESETS.md).
 
 | Setting | Group | Start at | Why |
 |---|---|---|---|
@@ -177,6 +179,7 @@ Signals appear at a bar's close and never vanish afterwards.
 
 | Document | Contents |
 |---|---|
+| **[Presets](docs/PRESETS.md)** | Starting configurations for XAUUSD 5m, BTC / AUDUSD / USDJPY 15m, with reasoning |
 | **[Glossary](docs/GLOSSARY.md)** | Every ICT term the engine implements — definition, how it is detected, what you see |
 | **[Settings](docs/SETTINGS.md)** | All ~170 inputs by group, with defaults, ranges and when to change them |
 | **[Tuning](docs/TUNING.md)** | Symptom → cause → fix, timeframe presets, instrument notes |
