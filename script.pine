@@ -1,0 +1,2306 @@
+//@version=6
+// max_bars_back is set explicitly because the zone engine walks back to the
+// origin candle of an impulse leg using a series offset (close[off]), and Pine
+// cannot infer the required history buffer for dynamic offsets on its own.
+indicator("Advanced RC Indicator v3.1 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
+
+
+
+// ===== USER INPUTS =====
+// Core FVG Settings
+detectBISI = input.bool(true, "Detect Bullish FVGs (BISI)")
+detectSIBI = input.bool(true, "Detect Bearish FVGs (SIBI)")
+
+// ===== UNIVERSAL AUTO-CALIBRATION =====
+// Every threshold is expressed as a multiple of ATR instead of hardcoded points,
+// so identical defaults behave correctly on gold, FX pairs, indices and crypto.
+calibSection = "Universal Calibration"
+atrPeriod = input.int(14, "ATR Period (volatility unit)", minval=5, maxval=50, group=calibSection, tooltip="The reference volatility unit. All zone sizes, impulse thresholds and tolerances are measured in multiples of this ATR.")
+minGapATR = input.float(0.10, "Min FVG Size (x ATR)", minval=0.01, maxval=2.0, step=0.01, group=calibSection, tooltip="Gaps smaller than this fraction of ATR are noise and get discarded.")
+tapToleranceATR = input.float(0.15, "Zone Tap Tolerance (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=calibSection, tooltip="How far outside a zone price may trade and still count as a valid tap.")
+mitigationDepth = input.float(0.5, "FVG Mitigation Depth", minval=0.0, maxval=1.0, step=0.05, group=calibSection, tooltip="Fraction of the gap price must fill to mitigate it. 0.5 = Consequent Encroachment (ICT standard), 1.0 = full fill.")
+
+// FVG Display Settings
+fvgMaxAge = input.int(150, "Maximum FVG Age (bars)", minval=1)
+showMitigated = input.bool(false, "Show Mitigated FVGs")
+extendFVG = input.bool(true, "Extend FVG Zones")
+
+// Multi-Timeframe Analysis
+mtfAnalysis = input.bool(true, "Multi-Timeframe Analysis")
+higherTF = input.string("60", "Higher Timeframe", options=["60", "240", "D", "W"])
+
+// Entry Signals
+showEntrySignals = input.bool(true, "Show Entry Signals")
+entryStrategy = input.string("Sharp Turn + Confirmation", "Entry Strategy", options=["Sharp Turn", "Sharp Turn + Confirmation"])
+respectTrend = input.bool(true, "Only Show Trend-Aligned Signals", tooltip="When enabled, only shows buy signals in uptrends and sell signals in downtrends")
+nonRepaintMode = input.bool(true, "Non-Repainting Mode", tooltip="Evaluate detection and signals only on confirmed bar closes. Signals never appear and then vanish, and alerts fire once per closed bar.")
+
+// ===== ICT MARKET STRUCTURE SETTINGS =====
+structureSection = "Market Structure (ICT)"
+swingLen = input.int(20, "Swing Pivot Length", minval=3, maxval=50, group=structureSection, tooltip="Bars either side required to confirm a major swing pivot. Drives the primary trend and the dealing range.")
+internalLen = input.int(5, "Internal Pivot Length", minval=2, maxval=20, group=structureSection, tooltip="Faster pivots used for internal structure shifts and entry timing.")
+showMarketStructure = input.bool(true, "Show Swing Pivots (H/L)", group=structureSection)
+showSwingStructure = input.bool(true, "Show Swing BOS / CHoCH / MSS", group=structureSection)
+showInternalStructure = input.bool(false, "Show Internal BOS / CHoCH", group=structureSection)
+dispATRMult = input.float(1.5, "Displacement Threshold (x ATR)", minval=0.3, maxval=5.0, step=0.1, group=structureSection, tooltip="Minimum candle body, in ATR multiples, for a move to count as displacement. A CHoCH backed by displacement is promoted to an MSS.")
+dispWindow = input.int(3, "Displacement Lookback (bars)", minval=1, maxval=10, group=structureSection, tooltip="How recently displacement must have occurred for a structure break to qualify as an MSS.")
+maxStructDrawings = input.int(30, "Max Structure Drawings", minval=5, maxval=120, group=structureSection, tooltip="Caps structure lines/labels so they never crowd out SL/TP lines against the 500-object limit.")
+
+// ===== DEALING RANGE / PREMIUM-DISCOUNT =====
+drSection = "Dealing Range (Premium / Discount)"
+showDealingRange = input.bool(true, "Show Dealing Range", group=drSection)
+showPDZones = input.bool(true, "Shade Premium / Discount Zones", group=drSection)
+
+// Enhanced Risk Management Settings
+riskSection = "Risk Management Settings"
+riskManagement = input.bool(true, "Show Risk Management Levels", group=riskSection)
+riskReward = input.float(2.0, "Risk:Reward Ratio", minval=0.5, step=0.5, tooltip="Target will be set at this multiple of the risk", group=riskSection)
+slPaddingATR = input.float(0.25, "Stop Loss Padding (x ATR)", minval=0.0, maxval=2.0, step=0.05, tooltip="Buffer beyond the zone edge when Smart ATR SL/TP is off, in ATR multiples so it adapts to any instrument", group=riskSection)
+trailingStop = input.bool(false, "Use Trailing Stop", group=riskSection)
+trailTriggerPercent = input.float(50, "Trail Trigger (%)", minval=10, maxval=90, step=5, tooltip="% of TP reached to activate trailing stop", group=riskSection)
+showPartialTP = input.bool(false, "Show Partial TP Levels", group=riskSection)
+partialTPPercent = input.float(50, "Partial TP (%)", minval=10, maxval=90, step=5, tooltip="% of total TP distance for partial", group=riskSection)
+
+// New Risk Management Features
+breakevenStop = input.bool(true, "Use Breakeven Stop", group=riskSection)
+breakevenTrigger = input.float(30, "Breakeven Trigger (%)", minval=10, maxval=90, step=5, tooltip="% of TP reached to move SL to breakeven", group=riskSection)
+maxDailyLoss = input.float(5.0, "Max Daily Loss (%)", minval=0.5, maxval=20, step=0.5, tooltip="Maximum allowed loss per day as % of account", group=riskSection)
+useVolatilityBasedSizing = input.bool(true, "Volatility-Based Position Sizing", group=riskSection)
+timeBasedExit = input.bool(false, "Time-Based Exit", group=riskSection)
+maxTradeHours = input.int(24, "Max Trade Duration (hours)", minval=1, maxval=168, tooltip="Maximum hours to hold a position", group=riskSection)
+
+// New Risk Management Additions
+maxConcurrentPositions = input.int(3, "Max Concurrent Positions", minval=1, maxval=10, group=riskSection)
+riskPerTrade = input.float(1.0, "Risk Per Trade (%)", minval=0.1, maxval=5.0, group=riskSection)
+
+// ===== CONFLUENCE SCORING SETTINGS =====
+confluenceSection = "Confluence Scoring"
+minConfluenceScore = input.float(40.0, "Minimum Confluence Score (0-100)", minval=0, maxval=100, step=5, group=confluenceSection, tooltip="Signals below this score are filtered out")
+showScoreLabels = input.bool(true, "Show Score Labels on FVGs", group=confluenceSection)
+scoreColorMode = input.bool(true, "Color-Code FVGs by Score", group=confluenceSection, tooltip="Override FVG colors with score-based gradient")
+
+// Scoring Weights (sum to 100)
+weightTrend = input.float(25.0, "Weight: Trend Alignment", minval=0, maxval=100, step=5, group=confluenceSection)
+weightRSI = input.float(15.0, "Weight: RSI", minval=0, maxval=100, step=5, group=confluenceSection)
+weightVolume = input.float(15.0, "Weight: Volume", minval=0, maxval=100, step=5, group=confluenceSection)
+weightVariant = input.float(20.0, "Weight: FVG Variant", minval=0, maxval=100, step=5, group=confluenceSection)
+weightSession = input.float(15.0, "Weight: Session Timing", minval=0, maxval=100, step=5, group=confluenceSection)
+weightVolatility = input.float(10.0, "Weight: Volatility", minval=0, maxval=100, step=5, group=confluenceSection)
+
+// ===== GOLD SESSION SETTINGS =====
+sessionSection = "Gold Sessions"
+showSessions = input.bool(true, "Show Trading Sessions", group=sessionSection)
+showSessionBG = input.bool(true, "Session Background Highlight", group=sessionSection)
+londonOpen = input.int(8, "London Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+londonClose = input.int(16, "London Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+nyOpen = input.int(13, "New York Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+nyClose = input.int(21, "New York Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+asianOpen = input.int(0, "Asian Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+asianClose = input.int(7, "Asian Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+
+// ===== CISD — CHANGE IN STATE OF DELIVERY =====
+// The earliest reversal trigger in the engine. Where CHoCH waits for a swing
+// point to break, CISD fires the moment a body closes through the opening price
+// of the consecutive opposing-direction candle run that delivered price into the
+// extreme — typically 2-4 candles earlier, for a much tighter stop.
+cisdSection = "CISD (Change in State of Delivery)"
+showCISD = input.bool(true, "Show CISD Triggers", group=cisdSection)
+cisdMinRun = input.int(2, "Min Delivery Run Length (candles)", minval=1, maxval=10, group=cisdSection, tooltip="How many consecutive same-direction closes must have delivered price into the extreme before its opening level counts as a CISD reference. 1 fires on every single-candle flip; 2-3 keeps only real delivery legs.")
+cisdExtremeLookback = input.int(12, "Run Must Own Extreme Of (bars)", minval=3, maxval=60, group=cisdSection, tooltip="The delivery run has to have produced the lowest low / highest high of this window. Without it, CISD fires on every pullback inside a trend instead of only at turning points.")
+cisdRequirePurge = input.bool(false, "Require Liquidity Purge First", group=cisdSection, tooltip="Only fire CISD when a tracked level was purged into the extreme. Far stricter and closer to the ICT 2022 Model sequence.")
+cisdMaxAge = input.int(40, "CISD Max Age (bars)", minval=5, maxval=200, group=cisdSection)
+
+// ===== LIQUIDITY PURGE (SWEEP) SETTINGS =====
+// A purge is price trading beyond a tracked level and closing back inside it.
+// The old wick-ratio heuristic could not tell a purge from a genuine breakout.
+liqSection = "Liquidity Purge (Sweeps)"
+showLiqSweeps = input.bool(true, "Show Liquidity Purges", group=liqSection)
+sweepConfirmBars = input.int(3, "Purge Confirm Window (bars)", minval=1, maxval=10, group=liqSection, tooltip="Price must close back inside the level within this many bars. If it does not, the level was genuinely broken rather than swept.")
+sweepMinPierceATR = input.float(0.02, "Min Pierce Depth (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=liqSection, tooltip="How far beyond the level price must trade before the breach counts, so a one-tick graze is ignored.")
+sweepTrackInternal = input.bool(true, "Track Internal Pivots as Liquidity", group=liqSection, tooltip="Adds the faster internal pivots to the level registry alongside the major swings.")
+sweepClusterATR = input.float(0.15, "Level Cluster Tolerance (x ATR)", minval=0.0, maxval=1.0, step=0.05, group=liqSection, tooltip="Pivots within this distance are merged into one level, so a single equal-highs cluster produces one purge instead of several.")
+sweepMaxAge = input.int(60, "Purge Max Age (bars)", minval=10, maxval=300, group=liqSection)
+levelMaxAge = input.int(400, "Untouched Level Max Age (bars)", minval=50, maxval=1000, group=liqSection)
+
+// ===== ZONE MODEL — OB / BREAKER / MITIGATION =====
+// One shared zone object replaces the old two-candle "order block". Every zone
+// carries body-based boundaries, a 50% mean threshold, a touch count and a flip
+// state, so freshness and quality are properties of everything on the chart.
+zoneSection = "Zones (OB / Breaker / Mitigation)"
+showZones = input.bool(true, "Show Zones", group=zoneSection)
+zoneUseWicks = input.bool(false, "Use Wick Boundaries", group=zoneSection, tooltip="Off = body-based zone (open to close of the origin candle), which is the boundary that actually holds. On = the full candle range.")
+zoneShowMean = input.bool(true, "Show Mean Threshold (50%)", group=zoneSection, tooltip="The consequent encroachment line. ICT entries are taken at the mean, not the far edge.")
+zoneOnInternalBreaks = input.bool(true, "Also Build Zones on Internal Breaks", group=zoneSection, tooltip="Off = only major swing BOS/CHoCH/MSS legs produce zones (very few, very high quality).")
+zoneOriginLookback = input.int(12, "Origin Candle Search (bars)", minval=3, maxval=50, group=zoneSection, tooltip="How far back from the impulse leg's start to look for the last opposite-colour candle.")
+zoneMinImpulseATR = input.float(0.6, "Min Impulse Leg Size (x ATR)", minval=0.1, maxval=5.0, step=0.1, group=zoneSection, tooltip="The leg away from the origin candle must span at least this much ATR, which is what separates a real order block from any two-candle pair.")
+zoneLiqWindow = input.int(10, "Liquidity Check Window (bars)", minval=3, maxval=50, group=zoneSection, tooltip="A leg that took out the extreme of this window grabbed liquidity and is tagged OB. A leg that reversed without taking it is a Mitigation block.")
+zoneMaxTouches = input.int(3, "Retire Zone After N Touches", minval=1, maxval=10, group=zoneSection, tooltip="Fresh (0 touches) is the highest quality. A zone tapped this many times is spent.")
+zoneMaxAge = input.int(200, "Zone Max Age (bars)", minval=10, maxval=1000, group=zoneSection)
+showBreakers = input.bool(true, "Show Breaker Blocks", group=zoneSection, tooltip="A violated order block that structure then confirmed against — failed supply becomes demand and vice versa.")
+showMitigationBlocks = input.bool(true, "Show Mitigation Blocks", group=zoneSection)
+breakerWindow = input.int(10, "Breaker Structure Window (bars)", minval=1, maxval=50, group=zoneSection, tooltip="A violated zone only becomes a Breaker if structure broke in the same direction this recently. Otherwise it is simply spent.")
+maxZones = input.int(18, "Max Zones Drawn", minval=4, maxval=60, group=zoneSection)
+
+// ===== QUASIMODO =====
+// Emitted as a named pattern off the pivot + purge + structure engines rather
+// than as a standalone module: Left Shoulder -> Leg -> Head sweeping the
+// shoulder -> break through the Leg -> retrace to the shoulder (the QML entry).
+qmSection = "Quasimodo (QM)"
+showQM = input.bool(true, "Show Quasimodo Patterns", group=qmSection)
+qmMinSweepATR = input.float(0.10, "Min Head Sweep Depth (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=qmSection, tooltip="How far the Head must run beyond the Left Shoulder for the sweep to be meaningful.")
+qmMaxAge = input.int(80, "QM Max Age (bars)", minval=10, maxval=400, group=qmSection)
+
+// ===== SMART ATR SL/TP SETTINGS =====
+atrSection = "Smart ATR SL/TP"
+useSmartATR = input.bool(true, "Use Smart ATR SL/TP", group=atrSection, tooltip="ATR-based stops that adapt to the instrument's own volatility — overrides fixed SL padding")
+atrSLMultiplier = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group=atrSection)
+atrTPMultiplier = input.float(3.0, "ATR TP Multiplier", minval=1.0, maxval=10.0, step=0.5, group=atrSection)
+
+// Display Settings
+displaySection = "Display Settings"
+showStatusTable = input.bool(true, "Show Status Table", group=displaySection)
+
+
+// ===== ALERT SETTINGS =====
+alertSection = "Alert Settings"
+enableAlerts = input.bool(true, "Enable Alerts", group=alertSection)
+
+
+
+// ===== COLOR SETTINGS =====
+colorSection = "Colors"
+// FVG Colors
+bullishFVGColorInput = input.color(color.green, "Bullish FVG Color", inline="bullish_colors", group=colorSection)
+bullishFVGTransp = input.int(80, "Transparency", minval=0, maxval=100, inline="bullish_colors", group=colorSection)
+bearishFVGColorInput = input.color(color.red, "Bearish FVG Color", inline="bearish_colors", group=colorSection)
+bearishFVGTransp = input.int(80, "Transparency", minval=0, maxval=100, inline="bearish_colors", group=colorSection)
+
+// Border Colors
+bullishBorderColorInput = input.color(color.green, "Bullish Border Color", inline="bullish_border", group=colorSection)
+bullishBorderTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="bullish_border", group=colorSection)
+bearishBorderColorInput = input.color(color.red, "Bearish Border Color", inline="bearish_border", group=colorSection)
+bearishBorderTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="bearish_border", group=colorSection)
+
+// FVG Variant Colors
+perfectFVGColorInput = input.color(color.rgb(0, 230, 215, 54), "Perfect FVG Color", inline="perfect_color", group=colorSection)
+perfectFVGTransp = input.int(70, "Transparency", minval=0, maxval=100, inline="perfect_color", group=colorSection)
+breakawayFVGColorInput = input.color(color.rgb(33, 149, 243, 49), "Breakaway FVG Color", inline="breakaway_color", group=colorSection)
+breakawayFVGTransp = input.int(70, "Transparency", minval=0, maxval=100, inline="breakaway_color", group=colorSection)
+rejectionFVGColorInput = input.color(color.orange, "Rejection FVG Color", inline="rejection_color", group=colorSection)
+rejectionFVGTransp = input.int(70, "Transparency", minval=0, maxval=100, inline="rejection_color", group=colorSection)
+
+// Confluence Score Tier Colors
+highScoreColorInput = input.color(color.rgb(0, 200, 80), "High Score FVG Color", inline="high_score", group=colorSection)
+highScoreTransp = input.int(60, "Transparency", minval=0, maxval=100, inline="high_score", group=colorSection)
+medScoreColorInput = input.color(color.rgb(255, 200, 0), "Medium Score FVG Color", inline="med_score", group=colorSection)
+medScoreTransp = input.int(65, "Transparency", minval=0, maxval=100, inline="med_score", group=colorSection)
+lowScoreColorInput = input.color(color.rgb(200, 50, 50), "Low Score FVG Color", inline="low_score", group=colorSection)
+lowScoreTransp = input.int(75, "Transparency", minval=0, maxval=100, inline="low_score", group=colorSection)
+
+// Mitigated FVG transparency
+mitigatedAlphaInput = input.int(90, "Mitigated FVG Transparency", minval=0, maxval=100, group=colorSection)
+
+// Risk Management Colors
+slColorInput = input.color(color.red, "Stop Loss Color", inline="sl_color", group=colorSection)
+slTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="sl_color", group=colorSection)
+tpColorInput = input.color(color.green, "Take Profit Color", inline="tp_color", group=colorSection)
+tpTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="tp_color", group=colorSection)
+partialTPColorInput = input.color(color.teal, "Partial TP Color", inline="ptp_color", group=colorSection)
+partialTPTransp = input.int(30, "Transparency", minval=0, maxval=100, inline="ptp_color", group=colorSection)
+
+// Signal Colors
+buySignalColorInput = input.color(color.green, "Buy Signal Color", inline="buy_color", group=colorSection)
+buySignalTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="buy_color", group=colorSection)
+sellSignalColorInput = input.color(color.red, "Sell Signal Color", inline="sell_color", group=colorSection)
+sellSignalTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="sell_color", group=colorSection)
+
+// Structure Colors
+upTrendColorInput = input.color(color.green, "Uptrend Color", inline="uptrend_color", group=colorSection)
+upTrendTransp = input.int(40, "Transparency", minval=0, maxval=100, inline="uptrend_color", group=colorSection)
+downTrendColorInput = input.color(color.red, "Downtrend Color", inline="downtrend_color", group=colorSection)
+downTrendTransp = input.int(40, "Transparency", minval=0, maxval=100, inline="downtrend_color", group=colorSection)
+
+// ICT Structure Colors
+bosColor = input.color(color.rgb(120, 190, 255), "BOS Line Color", group=colorSection)
+chochColor = input.color(color.rgb(255, 160, 60), "CHoCH Line Color", group=colorSection)
+mssColor = input.color(color.rgb(255, 60, 180), "MSS Line Color", group=colorSection)
+premiumZoneColor = input.color(color.rgb(220, 60, 60, 88), "Premium Zone", group=colorSection)
+discountZoneColor = input.color(color.rgb(0, 190, 110, 88), "Discount Zone", group=colorSection)
+equilibriumColor = input.color(color.rgb(180, 180, 200), "Equilibrium Line", group=colorSection)
+
+// Session Colors
+londonSessionColor = input.color(color.rgb(0, 100, 255, 90), "London Session BG", group=colorSection)
+nySessionColor = input.color(color.rgb(255, 165, 0, 90), "NY Session BG", group=colorSection)
+asianSessionColor = input.color(color.rgb(128, 0, 128, 92), "Asian Session BG", group=colorSection)
+obBullColor = input.color(color.rgb(0, 150, 136, 70), "Bullish OB Color", group=colorSection)
+obBearColor = input.color(color.rgb(233, 30, 99, 70), "Bearish OB Color", group=colorSection)
+liqSweepColor = input.color(color.rgb(255, 235, 59, 30), "Liquidity Sweep Color", group=colorSection)
+
+// Phase 2 object colors
+breakerBullColor = input.color(color.rgb(120, 220, 90, 68), "Bullish Breaker Color", group=colorSection)
+breakerBearColor = input.color(color.rgb(255, 120, 40, 68), "Bearish Breaker Color", group=colorSection)
+mitigationBullColor = input.color(color.rgb(90, 170, 255, 74), "Bullish Mitigation Color", group=colorSection)
+mitigationBearColor = input.color(color.rgb(190, 110, 255, 74), "Bearish Mitigation Color", group=colorSection)
+zoneMeanColor = input.color(color.rgb(230, 230, 240, 45), "Zone Mean Threshold", group=colorSection)
+cisdBullColor = input.color(color.rgb(0, 255, 190), "Bullish CISD Color", group=colorSection)
+cisdBearColor = input.color(color.rgb(255, 90, 130), "Bearish CISD Color", group=colorSection)
+qmBullColor = input.color(color.rgb(90, 255, 160), "Bullish QM Color", group=colorSection)
+qmBearColor = input.color(color.rgb(255, 100, 100), "Bearish QM Color", group=colorSection)
+
+// Apply transparency to colors
+bullishFVGColor = color.new(bullishFVGColorInput, bullishFVGTransp)
+bearishFVGColor = color.new(bearishFVGColorInput, bearishFVGTransp)
+bullishFVGBorderColor = color.new(bullishBorderColorInput, bullishBorderTransp)
+bearishFVGBorderColor = color.new(bearishBorderColorInput, bearishBorderTransp)
+mitigatedAlpha = mitigatedAlphaInput
+perfectFVGColor = color.new(perfectFVGColorInput, perfectFVGTransp)
+breakawayFVGColor = color.new(breakawayFVGColorInput, breakawayFVGTransp)
+rejectionFVGColor = color.new(rejectionFVGColorInput, rejectionFVGTransp)
+buySignalColor = color.new(buySignalColorInput, buySignalTransp)
+sellSignalColor = color.new(sellSignalColorInput, sellSignalTransp)
+slColor = color.new(slColorInput, slTransp)
+tpColor = color.new(tpColorInput, tpTransp)
+partialTPColor = color.new(partialTPColorInput, partialTPTransp)
+upTrendColor = color.new(upTrendColorInput, upTrendTransp)
+downTrendColor = color.new(downTrendColorInput, downTrendTransp)
+highScoreColor = color.new(highScoreColorInput, highScoreTransp)
+medScoreColor = color.new(medScoreColorInput, medScoreTransp)
+lowScoreColor = color.new(lowScoreColorInput, lowScoreTransp)
+
+// ===== DATA STRUCTURES =====
+// Enhanced Risk Management Levels Structure
+type RiskLevels
+    int entryBarIdx
+    float entryPrice
+    float slPrice
+    float tpPrice
+    float partialTP
+    float partialTP2
+    float partialTP3
+    string signalType
+    int lastBarDrawn
+    bool active
+    line slLine
+    line tpLine 
+    line partialLine
+    line partialLine2
+    line partialLine3
+    bool trailActive
+    bool breakevenActive
+    float positionSize
+    float entryTime
+
+// FVG Structure
+// start_time / candle3_time are the real chart timestamps of the first and third
+// candle of the gap. Boxes are drawn with xloc.bar_time so HTF zones land on the
+// bars they actually belong to instead of being offset from the chart's bar_index.
+type FVG
+    int start_idx
+    int candle3_idx
+    int start_time
+    int candle3_time
+    float top
+    float bottom
+    string fvgType
+    string fvgVariant
+    bool mitigated
+    string timeframe
+    int creation_bar_idx
+    float confluenceScore
+
+// Structure for Swing Points
+type SwingPoint
+    int index
+    float price
+    bool isHigh
+
+// ── Shared Zone model (Phase 2) ──────────────────────────────────────────────
+// One object for every price-delivery array in the system. Order blocks,
+// Breakers and Mitigation blocks are all Zones differing only by `kind` and by
+// which state transitions they have been through; Phase 3's IFVG / BPR /
+// Unicorn arrays plug in as further `kind` values with no new machinery.
+//
+// Boundaries are body-based by default (the MSNR insight) with the wick range
+// carried alongside, and `mean` is the 50% mean threshold — the same level as
+// consequent encroachment — which is where entries are actually taken.
+type Zone
+    float top
+    float bottom
+    float mean
+    float wickTop
+    float wickBottom
+    string kind          // "OB" | "Breaker" | "Mitigation"
+    int dir              // +1 = demand (bullish), -1 = supply (bearish)
+    int touches          // 0 = fresh = highest quality
+    bool flipped         // has been violated and re-purposed in the opposite direction
+    bool mitigated
+    bool active
+    int createdBar       // the origin candle, used as the box's left edge
+    int confirmBar       // the bar the structure break validated it on
+    int lastTouchBar
+    string origin        // the structure event that validated it: MSS / CHoCH / BOS / i-BOS
+
+// ── Liquidity level registry ─────────────────────────────────────────────────
+// Every confirmed pivot becomes a resting level. Levels are either purged (price
+// trades beyond, then closes back inside) or genuinely broken. Phase 4 extends
+// this same registry with EQH/EQL pools, session extremes and PDH/PDL.
+type LiqLevel
+    float price
+    int barIdx
+    bool isHigh
+    bool major           // major swing pivot vs faster internal pivot
+    int strength         // how many pivots merged into this level
+    bool swept
+    bool broken
+    int pierceBar        // na until price first trades beyond the level
+    float wickExtreme    // furthest point reached beyond it — the stop reference
+
+// A confirmed purge. `wickExtreme` is the invalidation point every reversal
+// model in the engine measures its stop from.
+type LiquiditySweep
+    int pierceBar
+    int confirmBar
+    float sweptLevel
+    float wickExtreme
+    int dir              // +1 = sellside purge (lows taken, expect up), -1 = buyside purge
+    bool major
+    bool invalidated
+
+// ── Change in State of Delivery ──────────────────────────────────────────────
+// The run being tracked lives in scalar globals rather than an object, because
+// Pine functions may mutate a global collection but may not reassign a global
+// variable — and the run has to advance in the global scope for the same reason
+// the structure engine does. Only completed CISD events are stored as objects.
+type CISDEvent
+    int barIdx
+    int runStart
+    float level          // the delivery run's opening price that was closed through
+    float extreme        // the run's low (bullish CISD) or high (bearish)
+    int dir              // +1 bullish, -1 bearish
+    bool displaced       // the breaking close itself carried displacement
+    bool purged          // liquidity was taken into the extreme first
+
+// ── Quasimodo ────────────────────────────────────────────────────────────────
+// qml is the Left Shoulder price — the entry. The stop sits beyond the Head and
+// the first objective is the broken Leg.
+type QMPattern
+    int barIdx
+    int dir              // +1 bullish, -1 bearish
+    float qml
+    float head
+    float leg
+    int lsBar
+    int headBar
+    int legBar
+    bool active
+
+
+// ===== GLOBAL VARIABLES =====
+// Arrays to store data
+var RiskLevels[] riskLevels = array.new<RiskLevels>()
+var FVG[] bullishFVGs = array.new<FVG>()
+var FVG[] bearishFVGs = array.new<FVG>()
+var SwingPoint[] swingPoints = array.new<SwingPoint>()
+var int[] bullEntries = array.new_int()
+var int[] bearEntries = array.new_int()
+
+// Market structure variables
+var string marketStructure = "Neutral"
+
+// Daily loss tracking
+var float dailyLoss = 0.0
+var int lastDayReset = dayofweek
+
+// Position management
+var int[] activePositions = array.new_int(0)
+
+// ===== PHASE 2 ENGINE STATE =====
+// One zone map for OBs, Breakers and Mitigation blocks
+var Zone[] zones = array.new<Zone>()
+
+// Liquidity level registry and the purges confirmed against it
+var LiqLevel[] liqLevels = array.new<LiqLevel>()
+var LiquiditySweep[] liqSweeps = array.new<LiquiditySweep>()
+
+// CISD events, and Quasimodo patterns
+var CISDEvent[] cisdEvents = array.new<CISDEvent>()
+var QMPattern[] qmPatterns = array.new<QMPattern>()
+
+// ── Delivery run tracking (drives both CISD and the zone origin candle) ──
+// Held as scalar globals rather than inside a function because Pine functions
+// may mutate a global collection but may not reassign a global variable.
+var int runDir = 0
+var int dnRunStart = na
+var float dnRunOpen = na
+var float dnRunLow = na
+var int dnRunLen = 0
+var bool dnRunBroken = true
+var int upRunStart = na
+var float upRunOpen = na
+var float upRunHigh = na
+var int upRunLen = 0
+var bool upRunBroken = true
+
+// Latest event summaries, surfaced on the dashboard and reused by later phases
+var string lastCISDDir = "None"
+var int lastCISDBar = na
+var float lastCISDLevel = na
+var bool lastCISDDisplaced = false
+var string lastPurgeDir = "None"
+var int lastPurgeBar = na
+var float lastPurgeExtreme = na
+var string lastQMDir = "None"
+var int lastQMBar = na
+
+// Drawing object references (so we can delete-and-redraw instead of piling up
+// new boxes/labels/lines every time the draw functions run)
+var box[] fvgBoxRefs = array.new<box>()
+var label[] fvgLabelRefs = array.new<label>()
+var label[] sweepLabelRefs = array.new<label>()
+var line[] sweepLineRefs = array.new<line>()
+
+// Phase 2 drawing references
+var box[] zoneBoxRefs = array.new<box>()
+var label[] zoneLabelRefs = array.new<label>()
+var line[] zoneLineRefs = array.new<line>()
+var line[] cisdLineRefs = array.new<line>()
+var label[] cisdLabelRefs = array.new<label>()
+var line[] qmLineRefs = array.new<line>()
+var label[] qmLabelRefs = array.new<label>()
+
+// Structure + dealing range drawing references
+var line[] structLineRefs = array.new<line>()
+var label[] structLabelRefs = array.new<label>()
+var label[] pivotLabelRefs = array.new<label>()
+var box[] drBoxRefs = array.new<box>()
+var line[] drLineRefs = array.new<line>()
+var label[] drLabelRefs = array.new<label>()
+
+// ===== UNIVERSAL VOLATILITY UNIT =====
+// Single reference used by every threshold in the script. Hoisted to the global
+// scope so no ta.* call ever executes inside a conditional branch or a loop,
+// which would otherwise corrupt its history series.
+atrRef = ta.atr(atrPeriod)
+atrRefSMA = ta.sma(atrRef, 50)
+volUnit = math.max(nz(atrRef), syminfo.mintick * 10)
+tapTol = tapToleranceATR * volUnit
+
+// ===== NON-REPAINT GATE =====
+// barstate.isconfirmed is always true on historical bars, so historical output is
+// unchanged; only the live forming bar is held back until it closes.
+barConfirmed = barstate.isconfirmed
+canDetect = not nonRepaintMode or barConfirmed
+
+// ===== ICT STRUCTURE ENGINE STATE =====
+// Swing structure drives the primary trend and the dealing range.
+var float swingHighPrice = na
+var int swingHighBar = na
+var float swingLowPrice = na
+var int swingLowBar = na
+var bool swingHighTaken = false
+var bool swingLowTaken = false
+var int swingTrend = 0
+
+// Internal structure gives faster shifts used for entry timing.
+var float intHighPrice = na
+var int intHighBar = na
+var float intLowPrice = na
+var int intLowBar = na
+var bool intHighTaken = false
+var bool intLowTaken = false
+var int intTrend = 0
+
+// Displacement tracking
+var int lastDispUpBar = -1
+var int lastDispDnBar = -1
+
+// Most recent structure event, surfaced on the dashboard
+var string lastStructEvent = "None"
+var int lastStructBar = na
+var string lastStructDir = ""
+
+// Most recent structure event of *any* resolution, including internal breaks.
+// The Breaker transition reads this rather than the major-swing event: with a
+// 20-bar swing length, major breaks are far too infrequent to confirm a zone
+// flip while the violated zone is still relevant.
+var int lastAnyStructBar = na
+var string lastAnyStructDir = ""
+
+// Dealing range / premium-discount
+var float drHigh = na
+var float drLow = na
+var float drEq = na
+var bool inPremium = false
+var bool inDiscount = false
+
+// Signal trigger references, so SL/TP bind to the zone that actually fired the
+// signal rather than whichever matching zone happens to be newest in the array.
+// Held in single-element arrays because Pine functions may mutate a global
+// collection but may not reassign a global variable.
+var FVG[] bullTriggerRef = array.new<FVG>()
+var FVG[] bearTriggerRef = array.new<FVG>()
+
+
+
+
+// ===== HELPER FUNCTIONS =====
+// Helper function to get current position count
+getCurrentPositions() =>
+    array.size(activePositions)
+
+// Helper function to add position
+addPosition() =>
+    array.push(activePositions, bar_index)
+    // Clean up old positions
+    if array.size(activePositions) > maxConcurrentPositions * 2
+        array.shift(activePositions)
+
+// Helper function to remove position
+removePosition() =>
+    if array.size(activePositions) > 0
+        array.pop(activePositions)
+
+// Check if max concurrent positions reached
+isMaxPositionsReached() =>
+    getCurrentPositions() >= maxConcurrentPositions
+
+// Delete-and-clear helpers for tracked drawing objects, so draw functions can
+// safely redraw from scratch without accumulating orphaned boxes/labels/lines
+clearBoxes(refs) =>
+    if array.size(refs) > 0
+        for b in refs
+            box.delete(b)
+        array.clear(refs)
+
+clearLabels(refs) =>
+    if array.size(refs) > 0
+        for l in refs
+            label.delete(l)
+        array.clear(refs)
+
+clearLines(refs) =>
+    if array.size(refs) > 0
+        for ln in refs
+            line.delete(ln)
+        array.clear(refs)
+
+// Rolling caps: keep the newest N drawings and delete the rest, so structure
+// annotations can never consume the 500-object budget needed by SL/TP lines.
+capLines(array<line> refs, int maxN) =>
+    while array.size(refs) > maxN
+        line.delete(array.shift(refs))
+
+capLabels(array<label> refs, int maxN) =>
+    while array.size(refs) > maxN
+        label.delete(array.shift(refs))
+
+capBoxes(array<box> refs, int maxN) =>
+    while array.size(refs) > maxN
+        box.delete(array.shift(refs))
+
+// Reset daily loss counter at start of new day
+resetDailyLoss() =>
+    dayofweek != lastDayReset
+
+// ===== CONFLUENCE SCORING FUNCTIONS =====
+// Pre-compute indicators used by scoring (called once per bar in main execution)
+rsiValue = ta.rsi(close, 14)
+volSMA = ta.sma(volume, 20)
+
+// Factor 1: Trend Alignment (0.0 - 1.0)
+// Full score when FVG direction aligns with market structure
+scoreTrendAlignment(fvgType) =>
+    if fvgType == "BISI" and marketStructure == "Uptrend"
+        1.0
+    else if fvgType == "SIBI" and marketStructure == "Downtrend"
+        1.0
+    else if marketStructure == "Neutral"
+        0.5
+    else
+        0.1  // Counter-trend = low score
+
+// Factor 2: RSI Condition (0.0 - 1.0)
+// Scored as a pullback/exhaustion filter rather than mean reversion. A bullish
+// setup is best on a healthy pullback (RSI 40-65): chasing an overbought market
+// and catching a collapsing one both score poorly. Mean-reversion scoring here
+// directly contradicted the trend-alignment factor, so the two cancelled out.
+scoreRSI(fvgType) =>
+    if fvgType == "BISI"
+        if rsiValue >= 45 and rsiValue <= 62
+            1.0
+        else if rsiValue >= 38 and rsiValue < 45
+            0.85
+        else if rsiValue > 62 and rsiValue <= 72
+            0.6
+        else if rsiValue >= 30 and rsiValue < 38
+            0.45
+        else if rsiValue > 72
+            0.2
+        else
+            0.15
+    else
+        if rsiValue >= 38 and rsiValue <= 55
+            1.0
+        else if rsiValue > 55 and rsiValue <= 62
+            0.85
+        else if rsiValue >= 28 and rsiValue < 38
+            0.6
+        else if rsiValue > 62 and rsiValue <= 70
+            0.45
+        else if rsiValue < 28
+            0.2
+        else
+            0.15
+
+// Factor 3: Volume Confirmation (0.0 - 1.0)
+// Higher score when volume exceeds its moving average
+scoreVolume() =>
+    if na(volSMA) or volSMA == 0
+        0.5
+    else
+        volRatio = volume / volSMA
+        if volRatio >= 2.0
+            1.0
+        else if volRatio >= 1.5
+            0.85
+        else if volRatio >= 1.0
+            0.65
+        else if volRatio >= 0.7
+            0.4
+        else
+            0.2
+
+// Factor 4: FVG Variant Quality (0.0 - 1.0)
+// Perfect FVGs are highest quality, Rejection lowest
+scoreVariant(variant) =>
+    if variant == "Perfect"
+        1.0
+    else if variant == "Breakaway"
+        0.7
+    else if variant == "Rejection"
+        0.4
+    else
+        0.3
+
+// Factor 5: Session Timing (0.0 - 1.0)
+// London (08:00-16:00 UTC) and New York (13:00-21:00 UTC) sessions score highest
+scoreSession() =>
+    currentHour = hour(time, "UTC")
+    // London & NY overlap (13:00-16:00 UTC) = best
+    if currentHour >= 13 and currentHour < 16
+        1.0
+    // London session (08:00-13:00 UTC)
+    else if currentHour >= 8 and currentHour < 13
+        0.8
+    // NY session (16:00-21:00 UTC)
+    else if currentHour >= 16 and currentHour < 21
+        0.75
+    // Early London / Late NY
+    else if currentHour >= 7 and currentHour < 8 or currentHour >= 21 and currentHour < 22
+        0.5
+    // Asian session (00:00-07:00 UTC)
+    else
+        0.3
+
+// Factor 6: Volatility Regime (0.0 - 1.0)
+// Healthy volatility (ATR near its average) scores best; extremes score lower
+scoreVolatility() =>
+    if na(atrRefSMA) or atrRefSMA == 0
+        0.5
+    else
+        volRatio = atrRef / atrRefSMA
+        if volRatio >= 0.8 and volRatio <= 1.5
+            1.0  // Healthy range
+        else if volRatio > 1.5 and volRatio <= 2.0
+            0.7  // Elevated but tradeable
+        else if volRatio > 2.0
+            0.3  // Too volatile / erratic
+        else if volRatio >= 0.5 and volRatio < 0.8
+            0.6  // Low but acceptable
+        else
+            0.2  // Dead market
+
+// Master: Calculate Confluence Score (0 - 100)
+calculateConfluenceScore(fvgType, fvgVariant) =>
+    totalWeight = weightTrend + weightRSI + weightVolume + weightVariant + weightSession + weightVolatility
+    safeTotal = math.max(totalWeight, 1.0)
+    
+    s1 = scoreTrendAlignment(fvgType) * weightTrend
+    s2 = scoreRSI(fvgType) * weightRSI
+    s3 = scoreVolume() * weightVolume
+    s4 = scoreVariant(fvgVariant) * weightVariant
+    s5 = scoreSession() * weightSession
+    s6 = scoreVolatility() * weightVolatility
+    
+    rawScore = (s1 + s2 + s3 + s4 + s5 + s6) / safeTotal * 100
+    math.round(math.max(0.0, math.min(100.0, rawScore)), 0)
+
+// Get color based on confluence score tier
+getScoreColor(score) =>
+    if score >= 70
+        highScoreColor
+    else if score >= 45
+        medScoreColor
+    else
+        lowScoreColor
+
+// Get score tier label
+getScoreTier(score) =>
+    if score >= 70
+        "A"
+    else if score >= 45
+        "B"
+    else
+        "C"
+
+// Calculate position size based on volatility and risk per trade.
+// Uses the globally hoisted atrRef / atrRefSMA: calling ta.atr() inside this
+// conditional branch made the averages update only on the bars where the branch
+// executed, which silently produced wrong values.
+calculatePositionSize(entryPrice, stopPrice) =>
+    if not useVolatilityBasedSizing or na(atrRefSMA) or atrRefSMA == 0
+        1.0
+    else
+        volatilityRatio = atrRef / atrRefSMA
+        adjustedSize = 1.0 / math.max(0.5, math.min(2.0, volatilityRatio))
+        risk = math.abs(entryPrice - stopPrice) / entryPrice
+        if risk <= 0
+            1.0
+        else
+            riskAdjustedSize = adjustedSize * (riskPerTrade / 100 / risk)
+            math.max(0.1, math.min(2.0, riskAdjustedSize))
+
+// ===== GOLD SESSION AWARENESS =====
+// Determine current trading session
+getCurrentSession() =>
+    h = hour(time, "UTC")
+    isLondon = h >= londonOpen and h < londonClose
+    isNY = h >= nyOpen and h < nyClose
+    isAsian = h >= asianOpen and h < asianClose
+    isOverlap = isLondon and isNY
+    if isOverlap
+        "London/NY Overlap"
+    else if isLondon
+        "London"
+    else if isNY
+        "New York"
+    else if isAsian
+        "Asian"
+    else
+        "Off-Hours"
+
+// Get session background color
+getSessionBGColor() =>
+    h = hour(time, "UTC")
+    isLondon = h >= londonOpen and h < londonClose
+    isNY = h >= nyOpen and h < nyClose
+    isAsian = h >= asianOpen and h < asianClose
+    if isLondon and isNY
+        color.new(color.rgb(0, 200, 100), 92)  // Overlap = distinct
+    else if isLondon
+        londonSessionColor
+    else if isNY
+        nySessionColor
+    else if isAsian
+        asianSessionColor
+    else
+        na
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIQUIDITY PURGE ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+// The old detector asked "does this candle have a long wick?", which cannot
+// distinguish a purge from a genuine breakout and never knew *which* level was
+// taken. This one tracks real resting liquidity and requires the two-part ICT
+// sequence: trade beyond the level, then close back inside it.
+
+// Merge a newly confirmed pivot into the level registry. Pivots within the
+// cluster tolerance are one level with a higher strength (an equal-highs /
+// equal-lows pool) rather than several duplicates that each fire their own purge.
+registerLiqLevel(int idx, float price, bool isHigh, bool major) =>
+    tol = sweepClusterATR * volUnit
+    merged = false
+    for lv in liqLevels
+        if lv.isHigh == isHigh and not lv.swept and not lv.broken and na(lv.pierceBar) and math.abs(lv.price - price) <= tol
+            lv.strength += 1
+            if (isHigh and price > lv.price) or (not isHigh and price < lv.price)
+                lv.price := price
+                lv.barIdx := idx
+                lv.wickExtreme := price
+            if major
+                lv.major := true
+            merged := true
+            break
+    if not merged
+        array.push(liqLevels, LiqLevel.new(price=price, barIdx=idx, isHigh=isHigh, major=major, strength=1, swept=false, broken=false, pierceBar=na, wickExtreme=price))
+    while array.size(liqLevels) > 120
+        array.shift(liqLevels)
+
+// Walk the registry: pierce -> close back inside = purge, pierce -> no return
+// inside the confirm window = a genuine break, and the level is retired.
+updateLiquidityLevels() =>
+    minPierce = sweepMinPierceATR * volUnit
+    n = array.size(liqLevels)
+    if n > 0
+        for idx = 0 to n - 1
+            i = n - 1 - idx
+            if i < 0
+                break
+            lv = array.get(liqLevels, i)
+            if lv.swept or lv.broken or bar_index - lv.barIdx > levelMaxAge
+                array.remove(liqLevels, i)
+                continue
+            if bar_index <= lv.barIdx
+                continue
+            if lv.isHigh
+                if high > lv.price + minPierce
+                    if na(lv.pierceBar)
+                        lv.pierceBar := bar_index
+                    lv.wickExtreme := math.max(lv.wickExtreme, high)
+                if not na(lv.pierceBar)
+                    if close < lv.price
+                        lv.swept := true
+                        array.push(liqSweeps, LiquiditySweep.new(pierceBar=lv.pierceBar, confirmBar=bar_index, sweptLevel=lv.price, wickExtreme=lv.wickExtreme, dir=-1, major=lv.major, invalidated=false))
+                    else if bar_index - lv.pierceBar >= sweepConfirmBars
+                        lv.broken := true
+            else
+                if low < lv.price - minPierce
+                    if na(lv.pierceBar)
+                        lv.pierceBar := bar_index
+                    lv.wickExtreme := math.min(lv.wickExtreme, low)
+                if not na(lv.pierceBar)
+                    if close > lv.price
+                        lv.swept := true
+                        array.push(liqSweeps, LiquiditySweep.new(pierceBar=lv.pierceBar, confirmBar=bar_index, sweptLevel=lv.price, wickExtreme=lv.wickExtreme, dir=1, major=lv.major, invalidated=false))
+                    else if bar_index - lv.pierceBar >= sweepConfirmBars
+                        lv.broken := true
+    while array.size(liqSweeps) > 60
+        array.shift(liqSweeps)
+
+// A purge stays valid as a stop reference until price closes beyond the wick
+// that created it — at that point the level was reclaimed, not swept.
+cleanPurges() =>
+    n = array.size(liqSweeps)
+    if n > 0
+        for idx = 0 to n - 1
+            i = n - 1 - idx
+            if i < 0
+                break
+            s = array.get(liqSweeps, i)
+            if bar_index - s.confirmBar > sweepMaxAge
+                array.remove(liqSweeps, i)
+                continue
+            if not s.invalidated
+                if s.dir == -1 and close > s.wickExtreme
+                    s.invalidated := true
+                else if s.dir == 1 and close < s.wickExtreme
+                    s.invalidated := true
+
+// Was liquidity taken in this direction within `window` bars?
+// dir +1 = sellside purge (lows taken, expect up), -1 = buyside purge.
+purgedRecently(int dir, int window) =>
+    found = false
+    for s in liqSweeps
+        if s.dir == dir and not s.invalidated and bar_index - s.confirmBar <= window
+            found := true
+            break
+    found
+
+// The furthest wick of the most recent live purge in a direction — the
+// invalidation point every reversal model measures its stop from.
+purgeStopRef(int dir) =>
+    float ref = na
+    int newest = -1
+    for s in liqSweeps
+        if s.dir == dir and not s.invalidated and s.confirmBar > newest
+            newest := s.confirmBar
+            ref := s.wickExtreme
+    ref
+
+drawPurges() =>
+    clearLabels(sweepLabelRefs)
+    clearLines(sweepLineRefs)
+    if showLiqSweeps
+        for s in liqSweeps
+            if bar_index - s.confirmBar <= sweepMaxAge
+                isSellside = s.dir == 1
+                col = s.invalidated ? color.new(color.gray, 55) : liqSweepColor
+                txt = (isSellside ? "▼" : "▲") + (s.major ? " PURGE" : " purge") + (s.invalidated ? " ✕" : "")
+                lbl = label.new(s.pierceBar, s.wickExtreme, txt, style=isSellside ? label.style_label_up : label.style_label_down, color=col, textcolor=color.black, size=size.tiny)
+                ln = line.new(int(math.max(0, s.pierceBar - 6)), s.sweptLevel, s.confirmBar + 3, s.sweptLevel, color=col, width=2, style=line.style_dotted)
+                array.push(sweepLabelRefs, lbl)
+                array.push(sweepLineRefs, ln)
+        capLabels(sweepLabelRefs, 30)
+        capLines(sweepLineRefs, 30)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CISD DRAWING
+// ═══════════════════════════════════════════════════════════════════════════
+drawCISD() =>
+    clearLines(cisdLineRefs)
+    clearLabels(cisdLabelRefs)
+    if showCISD
+        for e in cisdEvents
+            if bar_index - e.barIdx <= cisdMaxAge
+                isBull = e.dir == 1
+                col = isBull ? cisdBullColor : cisdBearColor
+                // The CISD level runs from the start of the delivery run it broke
+                ln = line.new(e.runStart, e.level, e.barIdx + 3, e.level, color=col, width=2)
+                tag = "CISD " + (isBull ? "▲" : "▼") + (e.displaced ? " ✦" : "") + (e.purged ? " ⓟ" : "")
+                lbl = label.new(e.barIdx, e.level, tag, style=isBull ? label.style_label_up : label.style_label_down, color=color.new(col, 25), textcolor=color.black, size=size.tiny)
+                array.push(cisdLineRefs, ln)
+                array.push(cisdLabelRefs, lbl)
+        capLines(cisdLineRefs, 30)
+        capLabels(cisdLabelRefs, 30)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ZONE ENGINE — ORDER BLOCKS, MITIGATION BLOCKS, BREAKERS
+// ═══════════════════════════════════════════════════════════════════════════
+// A zone is only created when a displacement leg *breaks structure*. The origin
+// candle is the last opposite-colour candle before that leg, which the delivery
+// run tracker already knows: the leg is the run, so the origin sits immediately
+// before the run started.
+findZoneOrigin(int runStartBar, bool wantDownCandle) =>
+    int resOff = -1
+    startOff = na(runStartBar) ? 1 : math.max(1, bar_index - runStartBar + 1)
+    if startOff <= zoneOriginLookback + 1
+        for k = 0 to zoneOriginLookback - 1
+            off = startOff + k
+            if off > bar_index or off > 450
+                break
+            if wantDownCandle and close[off] < open[off]
+                resOff := off
+                break
+            if not wantDownCandle and close[off] > open[off]
+                resOff := off
+                break
+    resOff
+
+// The ICT distinction between the two block types: an order block's leg takes
+// out prior liquidity on its way to the reversal, a mitigation block's does not.
+legTookLiquidity(int off, bool bullish) =>
+    float legExt = bullish ? low[off] : high[off]
+    for k = 0 to off - 1
+        legExt := bullish ? math.min(legExt, low[k]) : math.max(legExt, high[k])
+    float priorExt = bullish ? low[off + 1] : high[off + 1]
+    for k = 2 to zoneLiqWindow
+        o2 = off + k
+        if o2 > bar_index
+            break
+        priorExt := bullish ? math.min(priorExt, low[o2]) : math.max(priorExt, high[o2])
+    na(priorExt) ? false : bullish ? legExt < priorExt : legExt > priorExt
+
+createZone(int off, int dir, string origin) =>
+    if off >= 1 and off <= bar_index
+        oBar = bar_index - off
+        dup = false
+        for z in zones
+            if z.active and z.createdBar == oBar and z.dir == dir
+                dup := true
+                break
+        if not dup
+            wTop = high[off]
+            wBot = low[off]
+            bodyTop = math.max(open[off], close[off])
+            bodyBot = math.min(open[off], close[off])
+            float zTop = zoneUseWicks ? wTop : bodyTop
+            float zBot = zoneUseWicks ? wBot : bodyBot
+            // A doji origin would give a zero-height zone, so fall back to its range
+            if zTop - zBot < syminfo.mintick
+                zTop := wTop
+                zBot := wBot
+            // The leg away from the origin candle is what makes it an order block
+            legSpan = dir == 1 ? high - low[off] : high[off] - low
+            if zTop > zBot and legSpan >= zoneMinImpulseATR * volUnit
+                tookLiq = legTookLiquidity(off, dir == 1)
+                array.push(zones, Zone.new(top=zTop, bottom=zBot, mean=math.avg(zTop, zBot), wickTop=wTop, wickBottom=wBot, kind=tookLiq ? "OB" : "Mitigation", dir=dir, touches=0, flipped=false, mitigated=false, active=true, createdBar=oBar, confirmBar=bar_index, lastTouchBar=na, origin=origin))
+
+// Lifecycle: freshness, touch counting, and the Breaker transition. A violated
+// zone only becomes a Breaker if structure confirmed the new direction — failed
+// supply turning into demand. Without that confirmation it is simply spent.
+updateZones() =>
+    while array.size(zones) > maxZones * 4
+        array.shift(zones)
+
+    n = array.size(zones)
+    if n > 0
+        for idx = 0 to n - 1
+            i = n - 1 - idx
+            if i < 0
+                break
+            z = array.get(zones, i)
+            if not z.active or bar_index - z.confirmBar > zoneMaxAge
+                array.remove(zones, i)
+                continue
+            if bar_index <= z.confirmBar
+                continue
+
+            structFresh = not na(lastAnyStructBar) and bar_index - lastAnyStructBar <= breakerWindow
+            violated = z.dir == 1 ? close < z.bottom : close > z.top
+
+            if violated
+                // A violated zone only becomes a Breaker if structure confirmed
+                // the new direction — failed supply turning into demand. Without
+                // that confirmation the zone is simply spent.
+                canFlip = not z.flipped and showBreakers and structFresh and lastAnyStructDir == (z.dir == 1 ? "Bearish" : "Bullish")
+                if canFlip
+                    z.kind := "Breaker"
+                    z.dir := -z.dir
+                    z.flipped := true
+                    z.touches := 0
+                    z.lastTouchBar := bar_index
+                    z.origin := z.dir == 1 ? "flip ▲" : "flip ▼"
+                    // The breaker gets its own lifetime from the flip onwards
+                    z.confirmBar := bar_index
+                else
+                    z.mitigated := true
+                    z.active := false
+                continue
+
+            // One touch per distinct return, so sitting inside a zone for ten
+            // bars is not counted as ten separate tests of it.
+            inContact = low <= z.top + tapTol and high >= z.bottom - tapTol
+            if inContact
+                if na(z.lastTouchBar) or z.lastTouchBar < bar_index - 1
+                    z.touches += 1
+                z.lastTouchBar := bar_index
+            if z.touches > zoneMaxTouches
+                z.active := false
+
+zoneColorFor(Zone z) =>
+    z.kind == "Breaker" ? (z.dir == 1 ? breakerBullColor : breakerBearColor) : z.kind == "Mitigation" ? (z.dir == 1 ? mitigationBullColor : mitigationBearColor) : (z.dir == 1 ? obBullColor : obBearColor)
+
+drawZones() =>
+    clearBoxes(zoneBoxRefs)
+    clearLabels(zoneLabelRefs)
+    clearLines(zoneLineRefs)
+    if showZones
+        drawn = 0
+        n = array.size(zones)
+        if n > 0
+            for idx = 0 to n - 1
+                i = n - 1 - idx
+                if i < 0 or drawn >= maxZones
+                    break
+                z = array.get(zones, i)
+                if not z.active
+                    continue
+                if z.kind == "Mitigation" and not showMitigationBlocks
+                    continue
+                if z.kind == "Breaker" and not showBreakers
+                    continue
+                bg = zoneColorFor(z)
+                // Fresh zones get a solid, heavier border; used zones fade back
+                bx = box.new(z.createdBar, z.top, bar_index, z.bottom, bgcolor=bg, border_color=color.new(bg, 25), border_width=z.touches == 0 ? 2 : 1, border_style=z.touches == 0 ? line.style_solid : line.style_dashed)
+                array.push(zoneBoxRefs, bx)
+                if zoneShowMean
+                    array.push(zoneLineRefs, line.new(z.createdBar, z.mean, bar_index, z.mean, color=zoneMeanColor, width=1, style=line.style_dotted))
+                freshTag = z.touches == 0 ? "✦ fresh" : str.tostring(z.touches) + "t"
+                lbl = label.new(bar_index, z.dir == 1 ? z.bottom : z.top, z.kind + " " + (z.dir == 1 ? "▲" : "▼") + " " + freshTag + " | " + z.origin, style=label.style_label_left, color=color.new(bg, 15), textcolor=color.white, size=size.tiny)
+                array.push(zoneLabelRefs, lbl)
+                drawn += 1
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QUASIMODO
+// ═══════════════════════════════════════════════════════════════════════════
+cleanQM() =>
+    n = array.size(qmPatterns)
+    if n > 0
+        for idx = 0 to n - 1
+            i = n - 1 - idx
+            if i < 0
+                break
+            q = array.get(qmPatterns, i)
+            if bar_index - q.barIdx > qmMaxAge
+                array.remove(qmPatterns, i)
+                continue
+            // Trading beyond the Head voids the pattern
+            if q.active
+                if q.dir == -1 and close > q.head
+                    q.active := false
+                else if q.dir == 1 and close < q.head
+                    q.active := false
+    while array.size(qmPatterns) > 20
+        array.shift(qmPatterns)
+
+drawQM() =>
+    clearLines(qmLineRefs)
+    clearLabels(qmLabelRefs)
+    if showQM
+        for q in qmPatterns
+            if bar_index - q.barIdx <= qmMaxAge
+                isBull = q.dir == 1
+                col = q.active ? (isBull ? qmBullColor : qmBearColor) : color.new(color.gray, 55)
+                // QML = entry, Head = invalidation, Leg = first objective
+                array.push(qmLineRefs, line.new(q.lsBar, q.qml, bar_index, q.qml, color=col, width=2))
+                array.push(qmLineRefs, line.new(q.headBar, q.head, bar_index, q.head, color=color.new(col, 55), width=1, style=line.style_dashed))
+                array.push(qmLineRefs, line.new(q.legBar, q.leg, bar_index, q.leg, color=color.new(col, 55), width=1, style=line.style_dotted))
+                array.push(qmLabelRefs, label.new(q.barIdx, q.qml, "QM " + (isBull ? "▲" : "▼") + " QML" + (q.active ? "" : " ✕"), style=isBull ? label.style_label_up : label.style_label_down, color=color.new(col, 20), textcolor=color.white, size=size.tiny))
+        // Three lines per pattern, so the cap is a multiple of three
+        capLines(qmLineRefs, 45)
+        capLabels(qmLabelRefs, 15)
+
+// ===== SMART ATR-BASED SL/TP =====
+// Distances scale with the instrument's own ATR, so no per-symbol boost is needed.
+getSmartATRSL() =>
+    not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrSLMultiplier
+
+getSmartATRTP() =>
+    not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrTPMultiplier
+
+// ===== FVG DETECTION AND MANAGEMENT =====
+// gapThreshold is supplied by the caller in the price units of the context being
+// scanned (chart ATR for the chart timeframe, HTF ATR for the higher timeframe),
+// which replaces the old hardcoded gold-points / percentage split.
+// t0 and t2 are the timestamps of the third and first candle of the gap.
+detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
+    newBullishFVGs = array.new<FVG>()
+    newBearishFVGs = array.new<FVG>()
+
+    minGap = math.max(nz(gapThreshold), syminfo.mintick)
+
+    if nz(barIdx) >= 2
+        if detectBISI
+            gapUp = nz(l[0]) - nz(h[2])
+            if gapUp >= minGap
+                variant = "Perfect"
+                if nz(c[0]) > nz(h[1])
+                    variant := "Breakaway"
+                else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) < nz(l[0]) + (nz(h[0]) - nz(l[0])) * 0.3
+                    variant := "Rejection"
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("BISI", variant))
+                array.push(newBullishFVGs, newFVG)
+
+        if detectSIBI
+            gapDn = nz(l[2]) - nz(h[0])
+            if gapDn >= minGap
+                variant = "Perfect"
+                if nz(c[0]) < nz(l[1])
+                    variant := "Breakaway"
+                else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) > nz(h[0]) - (nz(h[0]) - nz(l[0])) * 0.3
+                    variant := "Rejection"
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("SIBI", variant))
+                array.push(newBearishFVGs, newFVG)
+    [newBullishFVGs, newBearishFVGs]
+
+processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
+    // Trim down to the cap in one pass. The old single remove() could not keep up
+    // if more than one zone was added on the same bar.
+    while array.size(fvgArray) > 200
+        array.shift(fvgArray)
+
+    size = array.size(fvgArray)
+    if size > 0 
+        for idx = 0 to size - 1
+            i = size - 1 - idx
+            if i < 0
+                break
+            fvg = array.get(fvgArray, i)
+            if bar_index - fvg.creation_bar_idx > fvgMaxAge
+                array.remove(fvgArray, i)
+                continue
+            if not fvg.mitigated
+                isMitigated = false
+                gapHeight = fvg.top - fvg.bottom
+
+                // Depth 0.5 = Consequent Encroachment, the ICT standard.
+                if fvg.fvgType == "BISI"
+                    penetrationPoint = fvg.top - gapHeight * mitigationDepth
+                    isMitigated := currentLow <= penetrationPoint
+                else if fvg.fvgType == "SIBI"
+                    penetrationPoint = fvg.bottom + gapHeight * mitigationDepth
+                    isMitigated := currentHigh >= penetrationPoint
+
+                if isMitigated
+                    fvg.mitigated := true
+                    if not showMitigated
+                        array.remove(fvgArray, i)
+                        continue
+
+// ===== DRAWING FUNCTIONS =====
+drawFVGs() =>
+    clearBoxes(fvgBoxRefs)
+    clearLabels(fvgLabelRefs)
+    bullishSize = array.size(bullishFVGs)
+    if bullishSize > 0
+        for i = 0 to bullishSize - 1
+            fvg = array.get(bullishFVGs, i)
+            boxColor = bullishFVGColor
+            borderColor = bullishFVGBorderColor
+            currentAlpha = 60
+
+            if fvg.mitigated and showMitigated
+                currentAlpha := mitigatedAlpha
+                boxColor := bullishFVGColor
+            else if not fvg.mitigated
+                // Score-based color override
+                if scoreColorMode
+                    boxColor := getScoreColor(fvg.confluenceScore)
+                    borderColor := getScoreColor(fvg.confluenceScore)
+                else
+                    if fvg.fvgVariant == "Perfect"
+                        boxColor := perfectFVGColor
+                    else if fvg.fvgVariant == "Breakaway"
+                        boxColor := breakawayFVGColor
+                    else if fvg.fvgVariant == "Rejection"
+                        boxColor := rejectionFVGColor
+            else
+                continue
+
+            boxBgColor = color.new(boxColor, currentAlpha)
+            boxBorderColor = color.new(borderColor, fvg.mitigated and showMitigated ? mitigatedAlpha : 20)
+            // Time coordinates keep HTF zones anchored to the bars they belong to.
+            right_time = extendFVG ? time : fvg.candle3_time
+            if right_time < fvg.candle3_time
+                right_time := fvg.candle3_time
+            borderWidth = fvg.confluenceScore >= 70 ? 2 : 1
+            newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
+            array.push(fvgBoxRefs, newBox)
+
+            // Score label
+            if showScoreLabels and not fvg.mitigated
+                scoreTier = getScoreTier(fvg.confluenceScore)
+                scoreText = str.tostring(fvg.confluenceScore, "#") + " [" + scoreTier + "]"
+                labelColor = getScoreColor(fvg.confluenceScore)
+                scoreLabel = label.new(fvg.start_time, fvg.top, scoreText, xloc=xloc.bar_time, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.tiny)
+                array.push(fvgLabelRefs, scoreLabel)
+
+            // HTF timeframe label
+            if fvg.timeframe != timeframe.period and not (fvg.mitigated and not showMitigated)
+                labelText = fvg.timeframe + "\n" + fvg.fvgVariant
+                htfLabel = label.new(fvg.candle3_time, fvg.top, labelText, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
+                array.push(fvgLabelRefs, htfLabel)
+
+    bearishSize = array.size(bearishFVGs)
+    if bearishSize > 0
+        for i = 0 to bearishSize - 1
+            fvg = array.get(bearishFVGs, i)
+            boxColor = bearishFVGColor
+            borderColor = bearishFVGBorderColor
+            currentAlpha = 60
+
+            if fvg.mitigated and showMitigated
+                currentAlpha := mitigatedAlpha
+                boxColor := bearishFVGColor
+            else if not fvg.mitigated
+                // Score-based color override
+                if scoreColorMode
+                    boxColor := getScoreColor(fvg.confluenceScore)
+                    borderColor := getScoreColor(fvg.confluenceScore)
+                else
+                    if fvg.fvgVariant == "Perfect"
+                        boxColor := perfectFVGColor
+                    else if fvg.fvgVariant == "Breakaway"
+                        boxColor := breakawayFVGColor
+                    else if fvg.fvgVariant == "Rejection"
+                        boxColor := rejectionFVGColor
+            else
+                continue
+
+            boxBgColor = color.new(boxColor, currentAlpha)
+            boxBorderColor = color.new(borderColor, fvg.mitigated and showMitigated ? mitigatedAlpha : 20)
+            right_time = extendFVG ? time : fvg.candle3_time
+            if right_time < fvg.candle3_time
+                right_time := fvg.candle3_time
+            borderWidth = fvg.confluenceScore >= 70 ? 2 : 1
+            newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
+            array.push(fvgBoxRefs, newBox)
+
+            // Score label
+            if showScoreLabels and not fvg.mitigated
+                scoreTier = getScoreTier(fvg.confluenceScore)
+                scoreText = str.tostring(fvg.confluenceScore, "#") + " [" + scoreTier + "]"
+                labelColor = getScoreColor(fvg.confluenceScore)
+                scoreLabel = label.new(fvg.start_time, fvg.bottom, scoreText, xloc=xloc.bar_time, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.tiny)
+                array.push(fvgLabelRefs, scoreLabel)
+
+            // HTF timeframe label
+            if fvg.timeframe != timeframe.period and not (fvg.mitigated and not showMitigated)
+                labelText = fvg.timeframe + "\n" + fvg.fvgVariant
+                htfLabel = label.new(fvg.candle3_time, fvg.bottom, labelText, xloc=xloc.bar_time, style=label.style_label_up, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
+                array.push(fvgLabelRefs, htfLabel)
+
+    // A 200-deep FVG array can emit two labels each, which would consume the
+    // entire 500-label budget and silently push the structure, zone, purge, CISD
+    // and QM annotations off the chart. Cap the oldest away to keep headroom:
+    // with every slider at maximum the tracked label total stays under 500.
+    capBoxes(fvgBoxRefs, 240)
+    capLabels(fvgLabelRefs, 120)
+
+// ===== ENTRY SIGNAL GENERATION =====
+generateEntrySignals() =>
+    array.clear(bullEntries)
+    array.clear(bearEntries)
+    array.clear(bullTriggerRef)
+    array.clear(bearTriggerRef)
+
+    // canDetect holds signals back until the bar closes in non-repainting mode.
+    if not showEntrySignals or isMaxPositionsReached() or not canDetect
+        [bullEntries, bearEntries]
+    else
+        if not respectTrend or marketStructure == "Uptrend"
+            bullishSize = array.size(bullishFVGs)
+            if bullishSize > 0
+                for i = 0 to bullishSize - 1
+                    fvg = array.get(bullishFVGs, i)
+                    if fvg.mitigated
+                        continue
+                    if fvg.confluenceScore < minConfluenceScore
+                        continue
+
+                    entrySignal = false
+                    // ATR-scaled tolerance. The old `fvg.bottom * 0.95` was a
+                    // 165-point window on gold at 3300 and a 0.05 window on EURUSD.
+                    tappedZone = low <= fvg.top + tapTol and low >= fvg.bottom - tapTol and close > open
+
+                    if fvg.fvgVariant == "Perfect"
+                        if tappedZone
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close > close[1] and close > open
+
+                    else if fvg.fvgVariant == "Breakaway"
+                        if bar_index == fvg.candle3_idx
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close > open
+
+                    else if fvg.fvgVariant == "Rejection"
+                        if tappedZone
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close > close[1] and volume > volume[1] * 1.1
+
+                    if entrySignal
+                        array.push(bullTriggerRef, fvg)
+                        array.push(bullEntries, bar_index)
+                        break
+
+        if not respectTrend or marketStructure == "Downtrend"
+            bearishSize = array.size(bearishFVGs)
+            if bearishSize > 0
+                for i = 0 to bearishSize - 1
+                    fvg = array.get(bearishFVGs, i)
+                    if fvg.mitigated
+                        continue
+                    if fvg.confluenceScore < minConfluenceScore
+                        continue
+
+                    entrySignal = false
+                    tappedZone = high >= fvg.bottom - tapTol and high <= fvg.top + tapTol and close < open
+
+                    if fvg.fvgVariant == "Perfect"
+                        if tappedZone
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close < close[1] and close < open
+
+                    else if fvg.fvgVariant == "Breakaway"
+                        if bar_index == fvg.candle3_idx
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close < open
+
+                    else if fvg.fvgVariant == "Rejection"
+                        if tappedZone
+                            if entryStrategy == "Sharp Turn"
+                                entrySignal := true
+                            else if entryStrategy == "Sharp Turn + Confirmation"
+                                entrySignal := close < close[1] and volume > volume[1] * 1.1
+
+                    if entrySignal
+                        array.push(bearTriggerRef, fvg)
+                        array.push(bearEntries, bar_index)
+                        break
+    
+    [bullEntries, bearEntries]
+
+
+// ===== RISK MANAGEMENT =====
+updateRiskManagementLines() =>
+    if array.size(riskLevels) > 0
+        for i = array.size(riskLevels) - 1 to 0
+            riskLevel = array.get(riskLevels, i)
+            
+            if timeBasedExit and riskLevel.active
+                hoursElapsed = (time - riskLevel.entryTime) / (60 * 60 * 1000)
+                if hoursElapsed >= maxTradeHours
+                    riskLevel.active := false
+                    removePosition()
+                    line.delete(riskLevel.slLine)
+                    line.delete(riskLevel.tpLine)
+                    if showPartialTP
+                        line.delete(riskLevel.partialLine)
+                        line.delete(riskLevel.partialLine2)
+                        line.delete(riskLevel.partialLine3)
+            
+            if riskLevel.active and riskLevel.signalType == "BUY"
+                if high >= riskLevel.tpPrice or low <= riskLevel.slPrice
+                    riskLevel.active := false
+                    removePosition()
+                    line.delete(riskLevel.slLine)
+                    line.delete(riskLevel.tpLine)
+                    if showPartialTP
+                        line.delete(riskLevel.partialLine)
+                        line.delete(riskLevel.partialLine2)
+                        line.delete(riskLevel.partialLine3)
+            else if riskLevel.active and riskLevel.signalType == "SELL"
+                if low <= riskLevel.tpPrice or high >= riskLevel.slPrice
+                    riskLevel.active := false
+                    removePosition()
+                    line.delete(riskLevel.slLine)
+                    line.delete(riskLevel.tpLine)
+                    if showPartialTP
+                        line.delete(riskLevel.partialLine)
+                        line.delete(riskLevel.partialLine2)
+                        line.delete(riskLevel.partialLine3)
+            
+            if bar_index - riskLevel.entryBarIdx > 200 or not riskLevel.active
+                if riskLevel.active
+                    removePosition()
+                    line.delete(riskLevel.slLine)
+                    line.delete(riskLevel.tpLine)
+                    if showPartialTP
+                        line.delete(riskLevel.partialLine)
+                        line.delete(riskLevel.partialLine2)
+                        line.delete(riskLevel.partialLine3)
+                array.remove(riskLevels, i)
+                continue
+                
+            if breakevenStop and riskLevel.active and not riskLevel.breakevenActive
+                if riskLevel.signalType == "BUY"
+                    tpDistance = riskLevel.tpPrice - riskLevel.entryPrice
+                    breakevenLevel = riskLevel.entryPrice + (tpDistance * breakevenTrigger / 100)
+                    if high >= breakevenLevel
+                        riskLevel.breakevenActive := true
+                        newSL = riskLevel.entryPrice + syminfo.mintick * 2
+                        line.delete(riskLevel.slLine)
+                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dashed)
+                        riskLevel.slPrice := newSL
+                else if riskLevel.signalType == "SELL"
+                    tpDistance = riskLevel.entryPrice - riskLevel.tpPrice
+                    breakevenLevel = riskLevel.entryPrice - (tpDistance * breakevenTrigger / 100)
+                    if low <= breakevenLevel
+                        riskLevel.breakevenActive := true
+                        newSL = riskLevel.entryPrice - syminfo.mintick * 2
+                        line.delete(riskLevel.slLine)
+                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dashed)
+                        riskLevel.slPrice := newSL
+                
+            if trailingStop and riskLevel.active and not riskLevel.trailActive and (not breakevenStop or riskLevel.breakevenActive)
+                if riskLevel.signalType == "BUY"
+                    tpDistance = riskLevel.tpPrice - riskLevel.entryPrice
+                    trailActivationLevel = riskLevel.entryPrice + (tpDistance * trailTriggerPercent / 100)
+                    if high >= trailActivationLevel
+                        riskLevel.trailActive := true
+                        newSL = math.max(riskLevel.entryPrice, riskLevel.slPrice + (high - trailActivationLevel))
+                        line.delete(riskLevel.slLine)
+                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dotted)
+                        riskLevel.slPrice := newSL
+                else if riskLevel.signalType == "SELL"
+                    tpDistance = riskLevel.entryPrice - riskLevel.tpPrice
+                    trailActivationLevel = riskLevel.entryPrice - (tpDistance * trailTriggerPercent / 100)
+                    if low <= trailActivationLevel
+                        riskLevel.trailActive := true
+                        newSL = math.min(riskLevel.entryPrice, riskLevel.slPrice - (trailActivationLevel - low))
+                        line.delete(riskLevel.slLine)
+                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dotted)
+                        riskLevel.slPrice := newSL
+                        
+            if riskLevel.active and riskLevel.lastBarDrawn != bar_index
+                line.set_x2(riskLevel.slLine, bar_index)
+                line.set_x2(riskLevel.tpLine, bar_index)
+                if showPartialTP
+                    line.set_x2(riskLevel.partialLine, bar_index)
+                    line.set_x2(riskLevel.partialLine2, bar_index)
+                    line.set_x2(riskLevel.partialLine3, bar_index)
+                riskLevel.lastBarDrawn := bar_index
+
+createRiskLevel(entryBar, price, isLong, fvg) =>
+    if not riskManagement
+        RiskLevels.new(entryBarIdx=entryBar, entryPrice=price, slPrice=0, tpPrice=0, partialTP=0, partialTP2=0, partialTP3=0, signalType="", lastBarDrawn=entryBar, active=false, slLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), tpLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine2=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine3=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), trailActive=false, breakevenActive=false, positionSize=1.0, entryTime=time)
+    else
+        entryPrice = price
+        slPrice = 0.0
+        tpPrice = 0.0
+        partialTpPrice = 0.0
+        partialTpPrice2 = 0.0
+        partialTpPrice3 = 0.0
+        slDistance = 0.0
+        signalType = isLong ? "BUY" : "SELL"
+        
+        effectiveSLPadding = slPaddingATR * volUnit
+        
+        // Smart ATR-based SL/TP (overrides fixed padding when enabled)
+        smartSL = getSmartATRSL()
+        smartTP = getSmartATRTP()
+        
+        if isLong
+            if useSmartATR and smartSL > 0
+                slPrice := entryPrice - smartSL
+                slDistance := smartSL
+                tpPrice := entryPrice + smartTP
+            else
+                slPrice := fvg.bottom - effectiveSLPadding
+                slDistance := entryPrice - slPrice
+                tpPrice := entryPrice + (slDistance * riskReward)
+            partialTpPrice := entryPrice + (slDistance * partialTPPercent / 100)
+            partialTpPrice2 := entryPrice + (slDistance * 0.75)
+            partialTpPrice3 := entryPrice + (slDistance * 1.5)
+        else
+            if useSmartATR and smartSL > 0
+                slPrice := entryPrice + smartSL
+                slDistance := smartSL
+                tpPrice := entryPrice - smartTP
+            else
+                slPrice := fvg.top + effectiveSLPadding
+                slDistance := slPrice - entryPrice
+                tpPrice := entryPrice - (slDistance * riskReward)
+            partialTpPrice := entryPrice - (slDistance * partialTPPercent / 100)
+            partialTpPrice2 := entryPrice - (slDistance * 0.75)
+            partialTpPrice3 := entryPrice - (slDistance * 1.5)
+        
+        posSize = calculatePositionSize(entryPrice, slPrice)
+        
+
+        slLine = line.new(entryBar, slPrice, bar_index, slPrice, color=slColor, width=2)
+        tpLine = line.new(entryBar, tpPrice, bar_index, tpPrice, color=tpColor, width=2)
+        
+        partialLine = showPartialTP ? 
+          line.new(entryBar, partialTpPrice, bar_index, partialTpPrice, color=partialTPColor, width=1, style=line.style_dashed) : 
+          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
+        
+        partialLine2 = showPartialTP ? 
+          line.new(entryBar, partialTpPrice2, bar_index, partialTpPrice2, color=partialTPColor, width=1, style=line.style_dotted) : 
+          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
+          
+        partialLine3 = showPartialTP ? 
+          line.new(entryBar, partialTpPrice3, bar_index, partialTpPrice3, color=partialTPColor, width=1, style=line.style_dotted) : 
+          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
+        
+        addPosition()
+        
+        RiskLevels.new(
+          entryBarIdx=entryBar, 
+          entryPrice=entryPrice, 
+          slPrice=slPrice, 
+          tpPrice=tpPrice, 
+          partialTP=partialTpPrice,
+          partialTP2=partialTpPrice2,
+          partialTP3=partialTpPrice3,
+          signalType=signalType, 
+          lastBarDrawn=entryBar, 
+          active=true, 
+          slLine=slLine, 
+          tpLine=tpLine, 
+          partialLine=partialLine,
+          partialLine2=partialLine2,
+          partialLine3=partialLine3,
+          trailActive=false,
+          breakevenActive=false,
+          positionSize=posSize,
+          entryTime=time)
+
+// Signals are drawn against the exact zone that triggered them, captured in
+// bullTriggerRef / bearTriggerRef. Previously this re-scanned the array and took
+// the newest match, so the stop could be placed on an unrelated zone.
+drawEntrySignals(bullishIndices, bearishIndices) =>
+    sess = getCurrentSession()
+    sessShort = sess == "London/NY Overlap" ? "LN/NY" : sess == "London" ? "LDN" : sess == "New York" ? "NY" : sess == "Asian" ? "ASIA" : "OFF"
+    pdTag = na(drEq) ? "" : close < drEq ? " | DISC" : " | PREM"
+
+    if array.size(bullishIndices) > 0 and array.includes(bullishIndices, bar_index) and array.size(bullTriggerRef) > 0
+        trigFVG = array.get(bullTriggerRef, 0)
+        stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
+        labelText = "▲ BUY " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag
+        labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.green, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(0, 180, 100), 10) : color.new(color.rgb(100, 160, 80), 20)
+        label.new(bar_index, low - tapTol, labelText, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.normal)
+        if riskManagement
+            newRiskLevel = createRiskLevel(bar_index, close, true, trigFVG)
+            array.push(riskLevels, newRiskLevel)
+
+    if array.size(bearishIndices) > 0 and array.includes(bearishIndices, bar_index) and array.size(bearTriggerRef) > 0
+        trigFVG = array.get(bearTriggerRef, 0)
+        stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
+        labelText = "▼ SELL " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag
+        labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.red, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(200, 50, 50), 10) : color.new(color.rgb(180, 80, 80), 20)
+        label.new(bar_index, high + tapTol, labelText, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.normal)
+        if riskManagement
+            newRiskLevel = createRiskLevel(bar_index, close, false, trigFVG)
+            array.push(riskLevels, newRiskLevel)
+
+updateStatusTable() =>
+    if barstate.islast and showStatusTable
+        // ── Gather all stats ──
+        bisiCount = 0
+        sibiCount = 0
+        perfectCount = 0
+        breakawayCount = 0
+        rejectionCount = 0
+        totalScore = 0.0
+        scoredCount = 0
+        highScoreCount = 0
+        
+        for fvg in bullishFVGs
+            if not fvg.mitigated
+                bisiCount += 1
+                totalScore += fvg.confluenceScore
+                scoredCount += 1
+                if fvg.confluenceScore >= 70
+                    highScoreCount += 1
+                if fvg.fvgVariant == "Perfect"
+                    perfectCount += 1
+                else if fvg.fvgVariant == "Breakaway"
+                    breakawayCount += 1
+                else if fvg.fvgVariant == "Rejection"
+                    rejectionCount += 1
+        
+        for fvg in bearishFVGs
+            if not fvg.mitigated
+                sibiCount += 1
+                totalScore += fvg.confluenceScore
+                scoredCount += 1
+                if fvg.confluenceScore >= 70
+                    highScoreCount += 1
+                if fvg.fvgVariant == "Perfect"
+                    perfectCount += 1
+                else if fvg.fvgVariant == "Breakaway"
+                    breakawayCount += 1
+                else if fvg.fvgVariant == "Rejection"
+                    rejectionCount += 1
+        
+        avgScore = scoredCount > 0 ? totalScore / scoredCount : 0.0
+        
+        activeRiskLevels = 0
+        if array.size(riskLevels) > 0
+            for i = 0 to array.size(riskLevels) - 1
+                if array.get(riskLevels, i).active
+                    activeRiskLevels += 1
+        
+        // ── Phase 2 engine state ──
+        obCount = 0
+        breakerCount = 0
+        mitigationCount = 0
+        freshCount = 0
+        for z in zones
+            if z.active
+                if z.kind == "Breaker"
+                    breakerCount += 1
+                else if z.kind == "Mitigation"
+                    mitigationCount += 1
+                else
+                    obCount += 1
+                if z.touches == 0
+                    freshCount += 1
+
+        livePurges = 0
+        for s in liqSweeps
+            if not s.invalidated
+                livePurges += 1
+        restingLevels = array.size(liqLevels)
+
+        activeQM = 0
+        for q in qmPatterns
+            if q.active
+                activeQM += 1
+
+        sessionName = getCurrentSession()
+        
+        // ── Theme Colors ──
+        headerBG   = color.new(color.rgb(20, 20, 35), 0)
+        labelBG    = color.new(color.rgb(35, 35, 55), 5)
+        valueBG    = color.new(color.rgb(28, 28, 45), 5)
+        accentGreen  = color.new(color.rgb(0, 200, 120), 15)
+        accentRed    = color.new(color.rgb(220, 50, 50), 15)
+        accentBlue   = color.new(color.rgb(60, 130, 255), 15)
+        accentGold   = color.new(color.rgb(255, 200, 40), 10)
+        accentPurple = color.new(color.rgb(160, 100, 255), 15)
+        dimText    = color.rgb(160, 160, 180)
+        brightText = color.white
+        
+        var table dash = table.new(position.top_right, 2, 16, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        
+        // ── Row 0: Header ──
+        tickerName = syminfo.ticker
+        trendIcon = marketStructure == "Uptrend" ? " ▲" : marketStructure == "Downtrend" ? " ▼" : " ◆"
+        trendColor = marketStructure == "Uptrend" ? accentGreen : marketStructure == "Downtrend" ? accentRed : color.new(color.gray, 30)
+        table.cell(dash, 0, 0, tickerName, text_color=accentGold, bgcolor=headerBG, text_size=size.normal, text_halign=text.align_left)
+        table.cell(dash, 1, 0, marketStructure + trendIcon, text_color=brightText, bgcolor=trendColor, text_size=size.normal, text_halign=text.align_center)
+        
+        // ── Row 1: Session ──
+        sessColor = sessionName == "London/NY Overlap" ? accentGreen : sessionName == "London" ? accentBlue : sessionName == "New York" ? color.new(color.orange, 15) : sessionName == "Asian" ? accentPurple : color.new(color.gray, 40)
+        table.cell(dash, 0, 1, "Session", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 1, sessionName, text_color=brightText, bgcolor=sessColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 2: Confluence Score ──
+        scoreIcon = avgScore >= 70 ? "★★★" : avgScore >= 45 ? "★★" : "★"
+        avgScoreColor = avgScore >= 70 ? accentGreen : avgScore >= 45 ? color.new(color.orange, 15) : accentRed
+        table.cell(dash, 0, 2, "Confluence", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 2, scoreIcon + " " + str.tostring(avgScore, "#.#") + " avg | " + str.tostring(highScoreCount) + " A-tier", text_color=brightText, bgcolor=avgScoreColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 3: FVG Count ──
+        totalFVG = bisiCount + sibiCount
+        table.cell(dash, 0, 3, "FVGs", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 3, "▲" + str.tostring(bisiCount) + " ▼" + str.tostring(sibiCount) + " = " + str.tostring(totalFVG), text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 4: FVG Variants ──
+        table.cell(dash, 0, 4, "Variants", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 4, "P:" + str.tostring(perfectCount) + " B:" + str.tostring(breakawayCount) + " R:" + str.tostring(rejectionCount), text_color=dimText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 5: Zone map (OB / Breaker / Mitigation) ──
+        table.cell(dash, 0, 5, "Zones", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 5, "OB:" + str.tostring(obCount) + " BRK:" + str.tostring(breakerCount) + " MIT:" + str.tostring(mitigationCount), text_color=color.rgb(0, 200, 180), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 6: Zone freshness ──
+        freshColor = freshCount > 0 ? accentGreen : color.new(color.gray, 45)
+        table.cell(dash, 0, 6, "Fresh Zones", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 6, str.tostring(freshCount) + " untouched ✦", text_color=brightText, bgcolor=freshColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 7: CISD ──
+        cisdAge = na(lastCISDBar) ? "" : " (" + str.tostring(bar_index - lastCISDBar) + "b)"
+        cisdColor = lastCISDDir == "Bullish" ? color.new(cisdBullColor, 25) : lastCISDDir == "Bearish" ? color.new(cisdBearColor, 25) : color.new(color.gray, 50)
+        cisdText = lastCISDDir == "None" ? "Awaiting" : lastCISDDir + (lastCISDDisplaced ? " ✦" : "") + cisdAge
+        table.cell(dash, 0, 7, "CISD", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 7, cisdText, text_color=color.black, bgcolor=cisdColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 8: Liquidity purges + resting levels ──
+        purgeAge = na(lastPurgeBar) ? "" : " (" + str.tostring(bar_index - lastPurgeBar) + "b)"
+        purgeRef = na(lastPurgeExtreme) ? "" : " @ " + str.tostring(lastPurgeExtreme, format.mintick)
+        purgeText = lastPurgeDir == "None" ? str.tostring(restingLevels) + " levels resting" : lastPurgeDir + purgeAge + purgeRef + " | " + str.tostring(livePurges) + " live"
+        table.cell(dash, 0, 8, "Liq Purge", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 8, purgeText, text_color=color.rgb(255, 235, 80), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 9: Quasimodo ──
+        qmAge = na(lastQMBar) ? "" : " (" + str.tostring(bar_index - lastQMBar) + "b)"
+        qmColor = activeQM == 0 ? color.new(color.gray, 50) : lastQMDir == "Bullish" ? color.new(qmBullColor, 25) : color.new(qmBearColor, 25)
+        qmText = lastQMDir == "None" ? "None" : lastQMDir + qmAge + " | " + str.tostring(activeQM) + " live"
+        table.cell(dash, 0, 9, "Quasimodo", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 9, qmText, text_color=color.black, bgcolor=qmColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 10: RSI ──
+        rsiColor = rsiValue > 70 ? accentRed : rsiValue < 30 ? accentGreen : valueBG
+        table.cell(dash, 0, 10, "RSI (14)", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 10, str.tostring(rsiValue, "#.#"), text_color=brightText, bgcolor=rsiColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 11: ATR / Volatility ──
+        volRatio = na(atrRefSMA) or atrRefSMA == 0 ? 0.0 : atrRef / atrRefSMA
+        volLabel = volRatio >= 1.5 ? "🔥 High" : volRatio >= 0.8 ? "Normal" : "Low"
+        atrDisplay = na(atrRef) ? "N/A" : str.tostring(atrRef, format.mintick) + " (" + volLabel + ")"
+        table.cell(dash, 0, 11, "ATR", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 11, atrDisplay, text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 12: Structure Event ──
+        structAge = na(lastStructBar) ? "" : " (" + str.tostring(bar_index - lastStructBar) + "b)"
+        structColor = lastStructEvent == "MSS" ? color.new(mssColor, 20) : lastStructEvent == "CHoCH" ? color.new(chochColor, 20) : lastStructEvent == "BOS" ? color.new(bosColor, 20) : color.new(color.gray, 50)
+        structText = lastStructEvent == "None" ? "Awaiting" : lastStructEvent + " " + lastStructDir + structAge
+        table.cell(dash, 0, 12, "Structure", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 12, structText, text_color=brightText, bgcolor=structColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 13: Dealing Range position ──
+        pdText = na(drEq) ? "No range yet" : inPremium ? "PREMIUM (sell zone)" : "DISCOUNT (buy zone)"
+        pdColor = na(drEq) ? color.new(color.gray, 50) : inPremium ? accentRed : accentGreen
+        table.cell(dash, 0, 13, "Range", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 13, pdText, text_color=brightText, bgcolor=pdColor, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 14: Risk Management ──
+        slMode = useSmartATR ? "Smart ATR" : "Fixed"
+        table.cell(dash, 0, 14, "SL/TP Mode", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 14, slMode + " | " + str.tostring(activeRiskLevels) + "/" + str.tostring(maxConcurrentPositions) + " pos", text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+        
+        // ── Row 15: Signal Status ──
+        signalText = nonRepaintMode ? "No Signal (confirmed)" : "No Signal"
+        signalBG = color.new(color.gray, 50)
+        if array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index)
+            signalText := "▲ BUY ACTIVE"
+            signalBG := accentGreen
+        if array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index)
+            signalText := "▼ SELL ACTIVE"
+            signalBG := accentRed
+        table.cell(dash, 0, 15, "Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 15, signalText, text_color=brightText, bgcolor=signalBG, text_size=size.small, text_halign=text.align_center)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DELIVERY RUN TRACKER
+// ═══════════════════════════════════════════════════════════════════════════
+// A delivery run is a series of consecutive same-direction closes — one leg of
+// algorithmic delivery. The opening price of the run's first candle is the level
+// that, once closed through, marks a change in the state of delivery. It is also
+// where every order block's origin candle sits, so both the CISD engine and the
+// zone engine read from here.
+//
+// Dojis extend the current run rather than sealing it: a candle with no body has
+// not delivered anything, so it cannot end a delivery leg.
+runIsUp = close > open
+runIsDn = close < open
+
+if canDetect
+    if runIsUp and runDir != 1
+        upRunStart := bar_index
+        upRunOpen := open
+        upRunHigh := high
+        upRunLen := 1
+        upRunBroken := false
+        runDir := 1
+    else if runIsDn and runDir != -1
+        dnRunStart := bar_index
+        dnRunOpen := open
+        dnRunLow := low
+        dnRunLen := 1
+        dnRunBroken := false
+        runDir := -1
+    else if runDir == 1
+        upRunHigh := math.max(nz(upRunHigh, high), high)
+        upRunLen += runIsUp ? 1 : 0
+    else if runDir == -1
+        dnRunLow := math.min(nz(dnRunLow, low), low)
+        dnRunLen += runIsDn ? 1 : 0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ICT MARKET STRUCTURE ENGINE — BOS / CHoCH / MSS
+// ═══════════════════════════════════════════════════════════════════════════
+// Replaces the old SMA-cross plus "count of higher highs in the last 10 bars"
+// heuristic, which had no notion of a break of structure. Pivots come from
+// ta.pivothigh / ta.pivotlow, which confirm only after `len` bars have closed on
+// both sides — inherently non-repainting.
+//
+//   BOS   — close beyond the prior swing extreme in the direction of the trend
+//   CHoCH — first close beyond the opposing extreme, flipping the trend
+//   MSS   — a CHoCH backed by displacement (the high-quality reversal trigger)
+
+// ── Displacement: an energetic candle that leaves an imbalance behind it ──
+dispBodyUp = close[1] - open[1]
+dispBodyDn = open[1] - close[1]
+displacementUp = dispBodyUp >= dispATRMult * volUnit and low > high[2]
+displacementDn = dispBodyDn >= dispATRMult * volUnit and high < low[2]
+
+if canDetect and displacementUp
+    lastDispUpBar := bar_index
+if canDetect and displacementDn
+    lastDispDnBar := bar_index
+
+dispUpRecent = lastDispUpBar >= 0 and bar_index - lastDispUpBar <= dispWindow
+dispDnRecent = lastDispDnBar >= 0 and bar_index - lastDispDnBar <= dispWindow
+
+// ── Confirmed pivots at two resolutions ──
+swingPH = ta.pivothigh(high, swingLen, swingLen)
+swingPL = ta.pivotlow(low, swingLen, swingLen)
+internalPH = ta.pivothigh(high, internalLen, internalLen)
+internalPL = ta.pivotlow(low, internalLen, internalLen)
+
+// Extremes of the CISD qualification window. Hoisted here, unconditional, so the
+// series stays consistent on every bar.
+cisdLowestWin = ta.lowest(low, cisdExtremeLookback)
+cisdHighestWin = ta.highest(high, cisdExtremeLookback)
+
+// ── Alternating zig-zag with same-type dedupe ──
+// Two consecutive highs with no low between them are one swing, so the less
+// extreme of the pair is folded away. Quasimodo pattern matching reads three
+// adjacent pivots and depends on that strict alternation holding.
+pushPivot(int idx, float price, bool isHigh) =>
+    n = array.size(swingPoints)
+    if n > 0
+        last = array.get(swingPoints, n - 1)
+        if last.isHigh == isHigh
+            if (isHigh and price > last.price) or (not isHigh and price < last.price)
+                last.index := idx
+                last.price := price
+        else
+            array.push(swingPoints, SwingPoint.new(index=idx, price=price, isHigh=isHigh))
+    else
+        array.push(swingPoints, SwingPoint.new(index=idx, price=price, isHigh=isHigh))
+    while array.size(swingPoints) > 60
+        array.shift(swingPoints)
+
+// ── Register new swing pivots ──
+// Every confirmed pivot is also resting liquidity, so it enters the purge
+// registry at the same time. A pivot cannot already be breached at this point:
+// ta.pivothigh only confirms once `swingLen` bars have closed below it.
+//
+// Gated on canDetect because the confirming bar is the forming bar: intrabar,
+// ta.pivothigh can report a pivot that the still-rising high then invalidates.
+// Ungated, that would push a phantom liquidity level and permanently corrupt the
+// high/low alternation the Quasimodo matcher depends on. Nothing is lost by
+// waiting — the pivot is registered at the close of the very same bar.
+if canDetect and not na(swingPH)
+    swingHighPrice := swingPH
+    swingHighBar := bar_index - swingLen
+    swingHighTaken := false
+    pushPivot(bar_index - swingLen, swingPH, true)
+    registerLiqLevel(bar_index - swingLen, swingPH, true, true)
+    if showMarketStructure
+        pivLbl = label.new(bar_index - swingLen, swingPH, "H", style=label.style_label_down, color=color.new(downTrendColorInput, 55), textcolor=color.white, size=size.tiny)
+        array.push(pivotLabelRefs, pivLbl)
+        capLabels(pivotLabelRefs, maxStructDrawings)
+
+if canDetect and not na(swingPL)
+    swingLowPrice := swingPL
+    swingLowBar := bar_index - swingLen
+    swingLowTaken := false
+    pushPivot(bar_index - swingLen, swingPL, false)
+    registerLiqLevel(bar_index - swingLen, swingPL, false, true)
+    if showMarketStructure
+        pivLbl = label.new(bar_index - swingLen, swingPL, "L", style=label.style_label_up, color=color.new(upTrendColorInput, 55), textcolor=color.white, size=size.tiny)
+        array.push(pivotLabelRefs, pivLbl)
+        capLabels(pivotLabelRefs, maxStructDrawings)
+
+// ── Register new internal pivots ──
+if canDetect and not na(internalPH)
+    intHighPrice := internalPH
+    intHighBar := bar_index - internalLen
+    intHighTaken := false
+    if sweepTrackInternal
+        registerLiqLevel(bar_index - internalLen, internalPH, true, false)
+if canDetect and not na(internalPL)
+    intLowPrice := internalPL
+    intLowBar := bar_index - internalLen
+    intLowTaken := false
+    if sweepTrackInternal
+        registerLiqLevel(bar_index - internalLen, internalPL, false, false)
+
+// ── Draw a structure break (line back to the broken pivot + tag) ──
+drawStructureBreak(int fromBar, float price, string txt, color col, bool isUp) =>
+    ln = line.new(fromBar, price, bar_index, price, color=col, width=2, style=line.style_dashed)
+    lb = label.new(int(math.avg(fromBar, bar_index)), price, txt, style=isUp ? label.style_label_down : label.style_label_up, color=color.new(col, 20), textcolor=color.white, size=size.tiny)
+    array.push(structLineRefs, ln)
+    array.push(structLabelRefs, lb)
+    capLines(structLineRefs, maxStructDrawings)
+    capLabels(structLabelRefs, maxStructDrawings)
+
+// ── Swing structure breaks ──
+bullBreakSwing = canDetect and not na(swingHighPrice) and not swingHighTaken and close > swingHighPrice
+bearBreakSwing = canDetect and not na(swingLowPrice) and not swingLowTaken and close < swingLowPrice
+
+if bullBreakSwing
+    isReversal = swingTrend == -1
+    evtName = isReversal ? (dispUpRecent ? "MSS" : "CHoCH") : "BOS"
+    evtColor = evtName == "MSS" ? mssColor : evtName == "CHoCH" ? chochColor : bosColor
+    swingHighTaken := true
+    swingTrend := 1
+    lastStructEvent := evtName
+    lastStructBar := bar_index
+    lastStructDir := "Bullish"
+    lastAnyStructBar := bar_index
+    lastAnyStructDir := "Bullish"
+    if showSwingStructure
+        drawStructureBreak(swingHighBar, swingHighPrice, evtName + " ▲", evtColor, true)
+
+if bearBreakSwing
+    isReversal = swingTrend == 1
+    evtName = isReversal ? (dispDnRecent ? "MSS" : "CHoCH") : "BOS"
+    evtColor = evtName == "MSS" ? mssColor : evtName == "CHoCH" ? chochColor : bosColor
+    swingLowTaken := true
+    swingTrend := -1
+    lastStructEvent := evtName
+    lastStructBar := bar_index
+    lastStructDir := "Bearish"
+    lastAnyStructBar := bar_index
+    lastAnyStructDir := "Bearish"
+    if showSwingStructure
+        drawStructureBreak(swingLowBar, swingLowPrice, evtName + " ▼", evtColor, false)
+
+// ── Internal structure breaks (faster, used for entry timing) ──
+// Hoisted into named values, and the event name resolved before intTrend is
+// mutated, so the zone engine downstream can read both.
+intBullBreak = canDetect and not na(intHighPrice) and not intHighTaken and close > intHighPrice
+intBearBreak = canDetect and not na(intLowPrice) and not intLowTaken and close < intLowPrice
+intBullEvt = intTrend == -1 ? "i-CHoCH" : "i-BOS"
+intBearEvt = intTrend == 1 ? "i-CHoCH" : "i-BOS"
+
+if intBullBreak
+    intHighTaken := true
+    intTrend := 1
+    lastAnyStructBar := bar_index
+    lastAnyStructDir := "Bullish"
+    if showInternalStructure
+        drawStructureBreak(intHighBar, intHighPrice, intBullEvt, color.new(bosColor, 40), true)
+
+if intBearBreak
+    intLowTaken := true
+    intTrend := -1
+    lastAnyStructBar := bar_index
+    lastAnyStructDir := "Bearish"
+    if showInternalStructure
+        drawStructureBreak(intLowBar, intLowPrice, intBearEvt, color.new(bosColor, 40), false)
+
+// Primary trend, consumed by the confluence scoring and the trend filter
+marketStructure := swingTrend == 1 ? "Uptrend" : swingTrend == -1 ? "Downtrend" : "Neutral"
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIQUIDITY PURGE PASS
+// ═══════════════════════════════════════════════════════════════════════════
+// Runs after pivot registration so a level confirmed on this bar is in the
+// registry, and before CISD so a purge into the extreme is already known.
+if canDetect
+    updateLiquidityLevels()
+    cleanPurges()
+
+// A purge confirmed on this very bar. lastPurgeExtreme carries the wick that
+// made it, which is the invalidation point every reversal model stops behind.
+purgeUpNow = purgedRecently(1, 0)
+purgeDnNow = purgedRecently(-1, 0)
+if purgeUpNow
+    lastPurgeDir := "Sellside"
+    lastPurgeBar := bar_index
+    lastPurgeExtreme := nz(purgeStopRef(1), lastPurgeExtreme)
+if purgeDnNow
+    lastPurgeDir := "Buyside"
+    lastPurgeBar := bar_index
+    lastPurgeExtreme := nz(purgeStopRef(-1), lastPurgeExtreme)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CISD — CHANGE IN STATE OF DELIVERY
+// ═══════════════════════════════════════════════════════════════════════════
+// Bullish CISD is a body close above the opening of the down-close run that made
+// the low; bearish is the mirror. On one reversal the three events fire in
+// sequence — CISD, then CHoCH, then MSS — which gives the engine a scout trigger
+// and a confirmation trigger from a single pass, with the scout carrying a far
+// tighter stop because the run's extreme is only a few candles away.
+cisdBodyNow = math.abs(close - open)
+cisdDisplaced = cisdBodyNow >= dispATRMult * volUnit
+// The run has to own the extreme of its window, otherwise every pullback inside
+// a trend would register as a change in delivery. A small ATR slack lets the
+// breaking candle's own wick undercut the run's extreme without voiding it.
+cisdExtTol = 0.10 * volUnit
+cisdPurgeUp = purgedRecently(1, cisdExtremeLookback)
+cisdPurgeDn = purgedRecently(-1, cisdExtremeLookback)
+
+// The effective extreme includes the reversing candle's own wick. Without it a
+// breaking candle that undercut the run low before closing back up — the single
+// most common reversal shape there is — would fail the window test. This is also
+// the true invalidation point, so it is what the event stores.
+cisdLowRef = math.min(nz(dnRunLow, low), low)
+cisdHighRef = math.max(nz(upRunHigh, high), high)
+
+bullCISD = canDetect and runIsUp and not na(dnRunOpen) and not dnRunBroken and dnRunLen >= cisdMinRun and close > dnRunOpen and cisdLowRef <= cisdLowestWin + cisdExtTol and (not cisdRequirePurge or cisdPurgeUp)
+bearCISD = canDetect and runIsDn and not na(upRunOpen) and not upRunBroken and upRunLen >= cisdMinRun and close < upRunOpen and cisdHighRef >= cisdHighestWin - cisdExtTol and (not cisdRequirePurge or cisdPurgeDn)
+
+if bullCISD
+    dnRunBroken := true
+    array.push(cisdEvents, CISDEvent.new(barIdx=bar_index, runStart=dnRunStart, level=dnRunOpen, extreme=cisdLowRef, dir=1, displaced=cisdDisplaced, purged=cisdPurgeUp))
+    lastCISDDir := "Bullish"
+    lastCISDBar := bar_index
+    lastCISDLevel := dnRunOpen
+    lastCISDDisplaced := cisdDisplaced
+
+if bearCISD
+    upRunBroken := true
+    array.push(cisdEvents, CISDEvent.new(barIdx=bar_index, runStart=upRunStart, level=upRunOpen, extreme=cisdHighRef, dir=-1, displaced=cisdDisplaced, purged=cisdPurgeDn))
+    lastCISDDir := "Bearish"
+    lastCISDBar := bar_index
+    lastCISDLevel := upRunOpen
+    lastCISDDisplaced := cisdDisplaced
+
+while array.size(cisdEvents) > 30
+    array.shift(cisdEvents)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ZONE PASS — lifecycle first, then creation off this bar's structure break
+// ═══════════════════════════════════════════════════════════════════════════
+if canDetect
+    updateZones()
+
+// The impulse leg that broke structure is the current delivery run, so the
+// origin candle — the last opposite-colour candle before the leg — sits
+// immediately before the run started. Both lookups run unconditionally to keep
+// their internal series consistent; the results are only consumed on break bars.
+zoneOriginUp = findZoneOrigin(runDir == 1 ? upRunStart : bar_index, true)
+zoneOriginDn = findZoneOrigin(runDir == -1 ? dnRunStart : bar_index, false)
+
+if bullBreakSwing and zoneOriginUp > 0
+    createZone(zoneOriginUp, 1, lastStructEvent)
+else if zoneOnInternalBreaks and intBullBreak and zoneOriginUp > 0
+    createZone(zoneOriginUp, 1, intBullEvt)
+
+if bearBreakSwing and zoneOriginDn > 0
+    createZone(zoneOriginDn, -1, lastStructEvent)
+else if zoneOnInternalBreaks and intBearBreak and zoneOriginDn > 0
+    createZone(zoneOriginDn, -1, intBearEvt)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QUASIMODO — pattern-matched over the last three confirmed pivots
+// ═══════════════════════════════════════════════════════════════════════════
+// Bearish: Left Shoulder high -> Leg low -> Head high sweeping beyond the
+// shoulder -> close through the Leg. The entry is the retrace back to the
+// shoulder price (the QML), the stop sits beyond the Head and the first
+// objective is the broken Leg. Structurally this is the same sequence the purge
+// and MSS engines already produce, which is why it is a named pattern here
+// rather than a module of its own.
+qmCount = array.size(swingPoints)
+if canDetect and qmCount >= 3
+    qmLS = array.get(swingPoints, qmCount - 3)
+    qmLeg = array.get(swingPoints, qmCount - 2)
+    qmHead = array.get(swingPoints, qmCount - 1)
+    qmSweepMin = qmMinSweepATR * volUnit
+    logged = false
+    for q in qmPatterns
+        if q.headBar == qmHead.index
+            logged := true
+            break
+    // Tag the pattern on the bar the Leg actually breaks, or on the bar the Head
+    // pivot confirms if the break already happened during its confirmation lag.
+    // Without this the pattern could be announced dozens of bars after the QML
+    // entry had come and gone.
+    headJustConfirmed = qmHead.index == bar_index - swingLen
+    if not logged
+        if qmLS.isHigh and not qmLeg.isHigh and qmHead.isHigh and qmHead.price > qmLS.price + qmSweepMin and close < qmLeg.price and (close[1] >= qmLeg.price or headJustConfirmed)
+            array.push(qmPatterns, QMPattern.new(barIdx=bar_index, dir=-1, qml=qmLS.price, head=qmHead.price, leg=qmLeg.price, lsBar=qmLS.index, headBar=qmHead.index, legBar=qmLeg.index, active=true))
+            lastQMDir := "Bearish"
+            lastQMBar := bar_index
+        else if not qmLS.isHigh and qmLeg.isHigh and not qmHead.isHigh and qmHead.price < qmLS.price - qmSweepMin and close > qmLeg.price and (close[1] <= qmLeg.price or headJustConfirmed)
+            array.push(qmPatterns, QMPattern.new(barIdx=bar_index, dir=1, qml=qmLS.price, head=qmHead.price, leg=qmLeg.price, lsBar=qmLS.index, headBar=qmHead.index, legBar=qmLeg.index, active=true))
+            lastQMDir := "Bullish"
+            lastQMBar := bar_index
+
+if canDetect
+    cleanQM()
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEALING RANGE — PREMIUM / DISCOUNT / EQUILIBRIUM
+// ═══════════════════════════════════════════════════════════════════════════
+// The range runs from the most recent confirmed swing low to the most recent
+// confirmed swing high, expanding with price while it trades beyond either edge.
+// Equilibrium is the 50% mark: ICT only buys in discount and sells in premium.
+if canDetect and not na(swingPH)
+    drHigh := swingPH
+if canDetect and not na(swingPL)
+    drLow := swingPL
+// Expand with price while it trades beyond an edge, gated so the range cannot
+// shift on the forming bar and then snap back.
+if canDetect and not na(drHigh) and high > drHigh
+    drHigh := high
+if canDetect and not na(drLow) and low < drLow
+    drLow := low
+
+drEq := na(drHigh) or na(drLow) ? na : math.avg(drHigh, drLow)
+inPremium := not na(drEq) and close > drEq
+inDiscount := not na(drEq) and close < drEq
+
+if barstate.islast
+    clearBoxes(drBoxRefs)
+    clearLines(drLineRefs)
+    clearLabels(drLabelRefs)
+    if showDealingRange and not na(drEq)
+        drLeft = int(math.min(nz(swingHighBar, bar_index - 50), nz(swingLowBar, bar_index - 50)))
+        if showPDZones
+            array.push(drBoxRefs, box.new(drLeft, drHigh, bar_index, drEq, bgcolor=premiumZoneColor, border_color=color.new(premiumZoneColor, 60), border_width=1))
+            array.push(drBoxRefs, box.new(drLeft, drEq, bar_index, drLow, bgcolor=discountZoneColor, border_color=color.new(discountZoneColor, 60), border_width=1))
+        array.push(drLineRefs, line.new(drLeft, drEq, bar_index, drEq, color=equilibriumColor, width=1, style=line.style_dotted))
+        array.push(drLineRefs, line.new(drLeft, drHigh, bar_index, drHigh, color=color.new(premiumZoneColor, 30), width=1))
+        array.push(drLineRefs, line.new(drLeft, drLow, bar_index, drLow, color=color.new(discountZoneColor, 30), width=1))
+        array.push(drLabelRefs, label.new(bar_index, drEq, "EQ " + str.tostring(drEq, format.mintick), style=label.style_label_left, color=color.new(equilibriumColor, 25), textcolor=color.black, size=size.tiny))
+
+// ===== MAIN CODE EXECUTION =====
+
+// 1. Update daily loss counter
+shouldResetDaily = resetDailyLoss()
+if shouldResetDaily
+    dailyLoss := 0.0
+    lastDayReset := dayofweek
+
+// 2. Gold Session Background
+sessionBG = (showSessions and showSessionBG) ? getSessionBGColor() : na
+bgcolor(sessionBG)
+
+// 3. Detect FVGs on the Current Timeframe.
+// Gated on canDetect so the forming bar cannot produce a zone that later vanishes.
+[currentBullish, currentBearish] = detectFVGs(high, low, close, open, timeframe.period, bar_index, minGapATR * volUnit, time[2], time)
+
+// 4. Add newly detected Current TF FVGs to the main arrays
+if canDetect
+    for fvg in currentBullish
+        array.push(bullishFVGs, fvg)
+    for fvg in currentBearish
+        array.push(bearishFVGs, fvg)
+
+// 5. Detect FVGs on the Higher Timeframe (if enabled).
+// The HTF ATR and the HTF candle timestamps travel with the request, so gaps are
+// sized against the higher timeframe's own volatility and boxes land on the
+// correct bars instead of being offset from the chart's bar_index.
+htfBullish_T = array.new<FVG>()
+htfBearish_T = array.new<FVG>()
+// The request is hoisted to the global scope and reuses the already-hoisted
+// atrRef expression, which Pine re-evaluates in the higher timeframe's context.
+// Leaving it inside `if mtfAnalysis` meant a stateful ta.* call lived in a
+// conditional branch — the same defect Phase 1 fixed in calculatePositionSize.
+[htf_h, htf_l, htf_c, htf_o, htf_barIdx, htf_atr, htf_t0, htf_t2] = request.security(syminfo.tickerid, higherTF, [high, low, close, open, bar_index, atrRef, time, time[2]], lookahead=barmerge.lookahead_off)
+if mtfAnalysis and (barstate.isfirst or nz(htf_barIdx[1]) != nz(htf_barIdx))
+    [htfBullishDetected, htfBearishDetected] = detectFVGs(htf_h, htf_l, htf_c, htf_o, higherTF, bar_index, minGapATR * math.max(nz(htf_atr), syminfo.mintick * 10), htf_t2, htf_t0)
+    htfBullish_T := htfBullishDetected
+    htfBearish_T := htfBearishDetected
+
+// 6. Add newly detected HTF FVGs to the main arrays
+if canDetect
+    for fvg in htfBullish_T
+        array.push(bullishFVGs, fvg)
+    for fvg in htfBearish_T
+        array.push(bearishFVGs, fvg)
+
+// 7. Process Mitigation and Cleanup Old FVGs
+processAndCleanFVGs(bullishFVGs, low, high)
+processAndCleanFVGs(bearishFVGs, low, high)
+
+// 8. The purge, CISD, zone and QM engines all ran in the Phase 2 engine section
+// above, immediately after the structure engine they depend on. Nothing to do
+// here beyond drawing their output.
+
+// 9. Draw everything on the last bar only. Every draw function deletes its own
+// previous boxes/labels/lines before redrawing, so the total object count stays
+// bounded and never approaches the 500-per-type platform limits.
+if barstate.islast
+    drawFVGs()
+    drawZones()
+    drawPurges()
+    drawCISD()
+    drawQM()
+
+// 10. Generate entry signals (confirmed bars only in non-repainting mode)
+[bullResultEntries, bearResultEntries] = generateEntrySignals()
+
+// 11. Process entry signals and update risk levels
+drawEntrySignals(bullResultEntries, bearResultEntries)
+if array.size(riskLevels) > 0
+    updateRiskManagementLines()
+
+// 12. Update status table
+updateStatusTable()
+
+// 13. Process alerts
+currentSession = getCurrentSession()
+bullSignalTriggered = array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index)
+bearSignalTriggered = array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index)
+maxPositionsHit = isMaxPositionsReached()
+
+if enableAlerts
+    if bullSignalTriggered
+        alert("BUY signal | Session: " + currentSession + " | " + syminfo.ticker, alert.freq_once_per_bar)
+    
+    if bearSignalTriggered
+        alert("SELL signal | Session: " + currentSession + " | " + syminfo.ticker, alert.freq_once_per_bar)
+    
+    if maxPositionsHit
+        alert("Maximum concurrent positions limit reached", alert.freq_once_per_bar)
+
+    // Phase 2 reversal triggers. CISD is the scout, structure is the
+    // confirmation; both are reported so the sequence is visible on the alert
+    // feed. Phase 5 replaces these with a single consolidated JSON payload.
+    if bullCISD
+        alert("CISD ▲ Bullish | level " + str.tostring(lastCISDLevel, format.mintick) + (cisdDisplaced ? " | displaced" : "") + (cisdPurgeUp ? " | post-purge" : "") + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    if bearCISD
+        alert("CISD ▼ Bearish | level " + str.tostring(lastCISDLevel, format.mintick) + (cisdDisplaced ? " | displaced" : "") + (cisdPurgeDn ? " | post-purge" : "") + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    if purgeUpNow
+        alert("Sellside liquidity purged | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    if purgeDnNow
+        alert("Buyside liquidity purged | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    if not na(lastQMBar) and lastQMBar == bar_index
+        alert("Quasimodo " + lastQMDir + " | QML entry | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+
