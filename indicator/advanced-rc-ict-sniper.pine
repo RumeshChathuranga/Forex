@@ -137,7 +137,7 @@ dolBiasWeight = input.float(12.0, "Directional Bias Weight", minval=0.0, maxval=
 // a weighted stack score on what survived.
 sniperSection = "Sniper Engine (A+ Setups)"
 enableSniper = input.bool(true, "Enable Sniper Engine", group=sniperSection, tooltip="The primary signal path. Fires rarely by design: every gate below must pass before a setup is even scored.")
-aPlusThreshold = input.float(52.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every gate but score below this are drawn as watch markers instead of signals. Tune it from what you see: the number on each watch marker is that setup score, so if the best markers on your chart read 55 then 75 can never fire and 50 fires on the best few. A conflicted market genuinely tops out in the 50s.")
+aPlusThreshold = input.float(45.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every gate but score below this are drawn as watch markers instead of signals. Tune it from what you see: the number on each watch marker is that setup score, so if the best markers on your chart read 55 then 75 can never fire and 50 fires on the best few. A conflicted market genuinely tops out in the 50s.")
 showWatchMarker = input.bool(true, "Show Watch Markers", group=sniperSection, tooltip="A small tag where every gate passed but the stack score fell short. Useful for seeing how close the engine came, and why.")
 sniperCooldown = input.int(10, "Min Bars Between Signals", minval=0, maxval=200, group=sniperSection, tooltip="Stops one setup being re-signalled on every bar price spends inside the same array.")
 maxStopATR = input.float(2.0, "Max Stop Distance (x ATR)", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="How far the stop may be widened past the array edge to reach the setup's swing invalidation — a purge wick or a Quasimodo head. Beyond this the array edge stands on its own, because a stop that far out is a different trade at a different size and its reward:risk will never qualify.")
@@ -2097,7 +2097,7 @@ drawFVGs() =>
     // tracked label total stays under 500. With every slider at maximum the
     // tracked label total lands just under 500.
     capBoxes(fvgBoxRefs, 240)
-    capLabels(fvgLabelRefs, 50)
+    capLabels(fvgLabelRefs, 35)
     // The CE lines share the 500-line budget with SL/TP, structure, zone means
     // and the SD projections, so only the newest gaps keep theirs.
     capLines(fvgCELineRefs, 40)
@@ -3683,7 +3683,7 @@ if canDetect and enableSniper
                 // so it does not sit on top of the zone boxes or its own triangle.
                 sTxt = (sDir == 1 ? "▲ BUY " : "▼ SELL ") + str.tostring(sScore, "#") + "\n" + sModel
                 array.push(sniperLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 4 : high + tapTol * 4, sTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(sCol, 10), textcolor=color.white, size=size.normal, tooltip=sTip))
-                capLabels(sniperLabelRefs, 25)
+                capLabels(sniperLabelRefs, 60)
                 if riskManagement
                     array.push(riskLevels, createSniperRisk(bar_index, sEntry, sSL, sT1, sT2, sT3, sDir == 1))
                     capRiskLevels()
@@ -3700,7 +3700,7 @@ if canDetect and enableSniper
                 if showWatchMarker
                     wTxt = "watch " + str.tostring(sScore, "#") + (sRR < minSignalRR ? " · " + str.tostring(sRR, "#.#") + "R" : "")
                     array.push(watchLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol : high + tapTol, wTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(watchMarkColor, 45), textcolor=color.white, size=size.tiny))
-                    capLabels(watchLabelRefs, 10)
+                    capLabels(watchLabelRefs, 15)
 
 // 8. Nothing to do here beyond drawing their output.
 

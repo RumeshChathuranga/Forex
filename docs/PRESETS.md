@@ -53,7 +53,7 @@ Apply to all four before the per-instrument deltas.
 | Redraw Every Tick | `off` | Rebuilds twice a bar instead of hundreds of times |
 | **Require Valid Structure State** | `on` | The only gate armed to begin with — a reversal with no structure shift is not a setup |
 | All other Hard Gates | `off` | Arm them one at a time, later, checking the tally after each |
-| A+ Score Threshold | `52` | A starting bar, not a target — you will change this |
+| A+ Score Threshold | `45` | A starting bar, not a target — you will change this |
 | Max Tracked FVGs | `100` | Slightly leaner than default; keeps the chart responsive |
 | Show Watch Markers | `on` | These are how you calibrate. Leave them on until tuning is done. |
 

@@ -69,7 +69,7 @@ Four settings matter on day one. Leave the rest alone until you have read
 
 | Setting | Group | Start at | Why |
 |---|---|---|---|
-| **A+ Score Threshold** | Sniper Engine | `52` | The single dial controlling signal frequency. Tune it from the dashboard — see below. |
+| **A+ Score Threshold** | Sniper Engine | `45` | The single dial controlling signal frequency. Tune it from the dashboard — see below. |
 | **Sniper Hard Gates** | Sniper Hard Gates | only *Require Valid Structure State* armed | Arming more tightens the engine. Arming all of them will silence it — see the [deadlock warning](docs/TUNING.md#the-gate-deadlock-trap). |
 | **Higher Timeframe** | top of the list | one step above your chart | Must actually be *higher* than the chart, or the intermediate-array gate can never pass. |
 | **Redraw Every Tick** | Display Settings | `off` | Off rebuilds the chart twice a bar instead of hundreds of times. Leave it off unless you need intrabar zones. |

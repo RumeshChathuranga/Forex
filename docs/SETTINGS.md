@@ -44,7 +44,7 @@ These decide what fires. Start here.
 | Input | Default | Range | What it does |
 |---|---|---|---|
 | Enable Sniper Engine | `on` | — | The primary signal path. Off leaves the map drawn but silent. |
-| **A+ Score Threshold** | `52` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. |
+| **A+ Score Threshold** | `45` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. |
 | Show Watch Markers | `on` | — | Tags every near-miss with its score. Keep these on — they are how you calibrate the threshold. |
 | Min Bars Between Signals | `10` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. |
 | Max Stop Distance (x ATR) | `2.0` | 0.5–10 | How far the stop may widen past the array edge to reach the setup's swing invalidation. Beyond this the array edge stands alone — a stop that far out is a different trade at a different size. |
@@ -332,9 +332,12 @@ is a collection the engine walks.
 | Zone Max Age (bars) | `200` | How long a zone survives | — | — |
 | Untouched Level Max Age | `400` | How long a resting level stays in the registry | — | — |
 
-At every slider's maximum the tracked object totals still land under 500. The drawing budget is
-allocated with signal output taking priority — FVG score tags are the first thing sacrificed when
-labels get tight.
+At default settings the tracked label total is about 300 of the 500 available. Pushing *Max
+Structure Drawings* and *Max Zones Drawn* to their maximums at the same time can exceed it; the
+oldest drawings are simply dropped, which is the intended degradation rather than an error.
+
+The budget is allocated with **signal output taking priority** — the engine retains 60 signal flags
+and 15 watch markers, and FVG score tags are the first thing sacrificed when labels get tight.
 
 ---
 
