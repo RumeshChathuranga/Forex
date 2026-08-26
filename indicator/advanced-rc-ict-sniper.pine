@@ -1,8 +1,13 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License,
+// v. 2.0. If a copy of the MPL was not distributed with this file, You can
+// obtain one at https://mozilla.org/MPL/2.0/.
+// © Advanced RC Indicator — ICT Sniper
+
 //@version=6
 // max_bars_back is set explicitly because the zone engine walks back to the
 // origin candle of an impulse leg using a series offset (close[off]), and Pine
 // cannot infer the required history buffer for dynamic offsets on its own.
-indicator("Advanced RC Indicator v3.1 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
+indicator("Advanced RC Indicator v3.4 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
 
 
 
@@ -22,6 +27,7 @@ mitigationDepth = input.float(0.5, "FVG Mitigation Depth", minval=0.0, maxval=1.
 
 // FVG Display Settings
 fvgMaxAge = input.int(150, "Maximum FVG Age (bars)", minval=1)
+maxTrackedFVGs = input.int(120, "Max Tracked FVGs (per side)", minval=20, maxval=300, tooltip="The working set the engine walks every bar. Every gap in it is re-examined on each bar and scanned again by the entry trigger, so this is the single biggest per-bar cost in the script. Raise it only if you trade a market that leaves more live gaps than this inside the maximum age.")
 showMitigated = input.bool(false, "Show Mitigated FVGs")
 extendFVG = input.bool(true, "Extend FVG Zones")
 
@@ -88,11 +94,9 @@ weightVariant = input.float(20.0, "Weight: FVG Variant", minval=0, maxval=100, s
 weightSession = input.float(15.0, "Weight: Session Timing", minval=0, maxval=100, step=5, group=confluenceSection)
 weightVolatility = input.float(10.0, "Weight: Volatility", minval=0, maxval=100, step=5, group=confluenceSection)
 
-// ===== SESSIONS, KILLZONES & TIME (PHASE 4) =====
+// ===== SESSIONS, KILLZONES & TIME =====
 // Windows are session strings evaluated in a named timezone rather than fixed
-// UTC hours. ICT's entire clock is New York local time, and the old integer
-// hours drifted the whole map by an hour twice a year across the US and UK DST
-// changes — silently moving every killzone off the window it was meant to mark.
+// UTC hours.
 sessionSection = "Sessions & Killzones"
 showSessions = input.bool(true, "Show Trading Sessions", group=sessionSection)
 showSessionBG = input.bool(true, "Session Background Highlight", group=sessionSection)
@@ -107,7 +111,7 @@ showTDO = input.bool(true, "True Day Open (NY Midnight)", group=sessionSection, 
 showPO3 = input.bool(true, "Classify Power of 3 (AMD)", group=sessionSection, tooltip="Accumulation, Manipulation, Distribution — the day's three acts, anchored on the True Day Open.")
 showJudas = input.bool(true, "Judas Swing", group=sessionSection, tooltip="The first sweep of the Asian range inside a killzone, reversed: the false move that positions traders the wrong way before the real expansion.")
 
-// ===== LIQUIDITY POOLS & HTF LEVELS (PHASE 4) =====
+// ===== LIQUIDITY POOLS & HTF LEVELS =====
 poolSection = "Liquidity Pools & HTF Levels"
 showEQ = input.bool(true, "Equal Highs / Lows (EQH / EQL)", group=poolSection, tooltip="Pivots inside the cluster tolerance are one pool of resting stops rather than several separate levels. The more pivots in the cluster, the more liquidity is parked there and the harder it pulls price.")
 eqMinStrength = input.int(2, "Min Pivots per Pool", minval=2, maxval=8, group=poolSection)
@@ -120,47 +124,52 @@ showTurtleSoup = input.bool(true, "Turtle Soup", group=poolSection, tooltip="A r
 tsLookback = input.int(20, "Turtle Soup Lookback (bars)", minval=5, maxval=200, group=poolSection)
 tsConfirmBars = input.int(5, "Turtle Soup Confirm Window (bars)", minval=1, maxval=20, group=poolSection)
 
-// ===== DRAW ON LIQUIDITY (PHASE 4) =====
+// ===== DRAW ON LIQUIDITY =====
 dolSection = "Draw on Liquidity (DOL)"
 showDOL = input.bool(true, "Show Draw on Liquidity", group=dolSection, tooltip="Ranks every unswept pool above and below price by how strongly it should attract delivery, and names the winner. That level is the objective a setup is measured to, instead of a fixed R multiple that has nothing to do with where the liquidity actually sits.")
 dolMinDistATR = input.float(0.75, "Min Distance to Qualify (x ATR)", minval=0.0, maxval=10.0, step=0.25, group=dolSection, tooltip="A pool closer than this is already in reach and is not an objective worth taking a trade for.")
 dolMaxDistATR = input.float(25.0, "Max Distance Considered (x ATR)", minval=2.0, maxval=200.0, step=1.0, group=dolSection)
 dolBiasWeight = input.float(12.0, "Directional Bias Weight", minval=0.0, maxval=50.0, step=1.0, group=dolSection, tooltip="How far premium/discount position and the swing trend tilt the ranking toward one side. Zero ranks purely on magnetism.")
 
-// ===== SNIPER SIGNAL ENGINE (PHASE 5) =====
+// ===== SNIPER SIGNAL ENGINE =====
 // The engine that decides whether anything is worth taking. It runs in two
 // stages: a top-down cascade of hard gates that all have to pass, and only then
-// a weighted stack score on what survived. A setup that fails one gate does not
-// score low — it does not score at all.
+// a weighted stack score on what survived.
 sniperSection = "Sniper Engine (A+ Setups)"
 enableSniper = input.bool(true, "Enable Sniper Engine", group=sniperSection, tooltip="The primary signal path. Fires rarely by design: every gate below must pass before a setup is even scored.")
-aPlusThreshold = input.float(80.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every hard gate but score below this are shown as watch markers instead of signals.")
+aPlusThreshold = input.float(52.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every gate but score below this are drawn as watch markers instead of signals. Tune it from what you see: the number on each watch marker is that setup score, so if the best markers on your chart read 55 then 75 can never fire and 50 fires on the best few. A conflicted market genuinely tops out in the 50s.")
 showWatchMarker = input.bool(true, "Show Watch Markers", group=sniperSection, tooltip="A small tag where every gate passed but the stack score fell short. Useful for seeing how close the engine came, and why.")
 sniperCooldown = input.int(10, "Min Bars Between Signals", minval=0, maxval=200, group=sniperSection, tooltip="Stops one setup being re-signalled on every bar price spends inside the same array.")
+maxStopATR = input.float(2.0, "Max Stop Distance (x ATR)", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="How far the stop may be widened past the array edge to reach the setup's swing invalidation — a purge wick or a Quasimodo head. Beyond this the array edge stands on its own, because a stop that far out is a different trade at a different size and its reward:risk will never qualify.")
 minSignalRR = input.float(2.0, "Min Reward:Risk to Fire", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="Measured from the invalidation-based stop to the draw on liquidity. A setup that cannot pay this is not taken however well it scores.")
-showLegacySignals = input.bool(false, "Also Show Legacy FVG Confluence Signals", group=sniperSection, tooltip="The Phase 1-3 FVG tap signal. Off by default: it fires far more often and on a much lower bar, which is exactly what this phase exists to replace.")
+showLegacySignals = input.bool(false, "Also Show Legacy FVG Confluence Signals", group=sniperSection, tooltip="The simple FVG-tap signal with its confluence score. Off by default: it fires far more often, and on a much lower bar, than the sniper cascade.")
 
-// ===== SNIPER HARD GATES (PHASE 5) =====
+// ===== SNIPER HARD GATES =====
 // Each gate can be switched off individually, and the dashboard checklist always
 // shows which are armed and which are currently passing, so a quiet chart is
 // explainable rather than mysterious.
+// Only two are armed by default. Nine independent conditions that must all hold
+// on the same bar multiply out to roughly one qualifying bar in several
+// thousand, which is not "strict" — it is off. The ones disarmed here are not
+// discarded: HTF bias, killzone, liquidity, SMT and DOL room are all scored by
+// the weighted stack below, so they still decide whether a setup is good enough
+// to fire, they just no longer each hold a veto. Arm more of them to tighten.
 gateSection = "Sniper Hard Gates"
-gateHTF = input.bool(true, "Require HTF Bias Alignment", group=gateSection)
+gateHTF = input.bool(false, "Require HTF Bias Alignment", group=gateSection)
 htfBiasTF = input.string("240", "HTF Bias Timeframe", options=["60", "240", "D", "W"], group=gateSection)
 htfBiasLen = input.int(20, "HTF Structure Length (bars)", minval=5, maxval=100, group=gateSection, tooltip="A close beyond the extreme of this many higher-timeframe bars is a break of structure up there. The bias latches until the opposite extreme is broken.")
-gateITF = input.bool(true, "Require Intermediate PD Array Agreement", group=gateSection, tooltip="A live, unmitigated gap on the Multi-Timeframe higher timeframe pointing the same way as the trade.")
-gatePD = input.bool(true, "Require Correct Half of Dealing Range", group=gateSection, tooltip="Never buy in premium, never sell in discount.")
-gateKZ = input.bool(true, "Require Active Killzone", group=gateSection)
-gateStruct = input.bool(true, "Require Valid Structure State", group=gateSection, tooltip="Post-CISD, post-MSS/CHoCH, or a BOS continuation in the trade's direction.")
+gateITF = input.bool(false, "Require Intermediate PD Array Agreement", group=gateSection, tooltip="A live, unmitigated gap on the Multi-Timeframe higher timeframe pointing the same way as the trade.")
+gatePD = input.bool(false, "Require Correct Half of Dealing Range", group=gateSection, tooltip="Never buy in premium, never sell in discount. Off by default because as a veto it deadlocks against the structure gate — in a downtrend price sits in discount, so shorts fail this and longs fail structure, and nothing can ever fire. It is scored by the stack instead.")
+gateKZ = input.bool(false, "Require Active Killzone", group=gateSection)
+gateStruct = input.bool(true, "Require Valid Structure State", group=gateSection, tooltip="Post-CISD, post-MSS/CHoCH, or a BOS continuation in the trade's direction. Armed by default: with no structure shift there is no reversal to trade.")
 structValidWindow = input.int(15, "Structure Valid For (bars)", minval=1, maxval=100, group=gateSection)
-gateLiq = input.bool(true, "Require Liquidity Taken", group=gateSection, tooltip="A purge, a Turtle Soup raid or a Judas swing in the trade's direction. Price has to have run stops before it reverses.")
+gateLiq = input.bool(false, "Require Liquidity Taken", group=gateSection, tooltip="A purge, a Turtle Soup raid or a Judas swing in the trade's direction. Price has to have run stops before it reverses.")
 liqTakenWindow = input.int(20, "Liquidity Taken Within (bars)", minval=1, maxval=100, group=gateSection)
-gateSMT = input.bool(true, "Reject Opposing SMT Divergence", group=gateSection)
-gateDOL = input.bool(true, "Require Draw on Liquidity in Trade Direction", group=gateSection)
+gateSMT = input.bool(false, "Reject Opposing SMT Divergence", group=gateSection)
+gateDOL = input.bool(false, "Require Draw on Liquidity in Trade Direction", group=gateSection)
 dolMinRoomATR = input.float(2.0, "Min DOL Room (x ATR)", minval=0.5, maxval=20.0, step=0.5, group=gateSection)
-showGateTable = input.bool(true, "Show Gate Checklist Table", group=gateSection)
 
-// ===== SNIPER STACK WEIGHTS (PHASE 5) =====
+// ===== SNIPER STACK WEIGHTS =====
 // Stage B. Applied only to setups that already cleared every armed gate, so
 // these decide *how good* a valid setup is, never whether it is valid.
 stackSection = "Sniper Stack Weights"
@@ -173,8 +182,9 @@ wVol = input.float(8.0, "Volume", minval=0.0, maxval=50.0, step=1.0, group=stack
 wSMT = input.float(10.0, "SMT Confirmation", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
 wTime = input.float(12.0, "Timing (Macro / Silver Bullet)", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
 wDOLRoom = input.float(10.0, "DOL Room & Alignment", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wPD = input.float(12.0, "Premium / Discount Half", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Buying discount and selling premium. Scored rather than vetoed: as a hard gate it deadlocked against the structure gate, because in a downtrend price sits in discount — so shorts were refused for being in the wrong half while longs were refused for having no bullish structure.")
 
-// ===== SMT DIVERGENCE (PHASE 4) =====
+// ===== SMT DIVERGENCE =====
 smtSection = "SMT Divergence"
 smtMode = input.string("Auto", "Correlated Instrument", options=["Auto", "Manual", "Off"], group=smtSection, tooltip="Auto picks the partner by asset class: gold against DXY (inverse), EURUSD against GBPUSD, NQ against SPX, BTC against ETH, and so on.")
 smtSymbolInput = input.symbol("TVC:DXY", "Manual Symbol", group=smtSection)
@@ -196,7 +206,6 @@ cisdMaxAge = input.int(40, "CISD Max Age (bars)", minval=5, maxval=200, group=ci
 
 // ===== LIQUIDITY PURGE (SWEEP) SETTINGS =====
 // A purge is price trading beyond a tracked level and closing back inside it.
-// The old wick-ratio heuristic could not tell a purge from a genuine breakout.
 liqSection = "Liquidity Purge (Sweeps)"
 showLiqSweeps = input.bool(true, "Show Liquidity Purges", group=liqSection)
 sweepConfirmBars = input.int(3, "Purge Confirm Window (bars)", minval=1, maxval=10, group=liqSection, tooltip="Price must close back inside the level within this many bars. If it does not, the level was genuinely broken rather than swept.")
@@ -207,9 +216,9 @@ sweepMaxAge = input.int(60, "Purge Max Age (bars)", minval=10, maxval=300, group
 levelMaxAge = input.int(400, "Untouched Level Max Age (bars)", minval=50, maxval=1000, group=liqSection)
 
 // ===== ZONE MODEL — OB / BREAKER / MITIGATION =====
-// One shared zone object replaces the old two-candle "order block". Every zone
-// carries body-based boundaries, a 50% mean threshold, a touch count and a flip
-// state, so freshness and quality are properties of everything on the chart.
+// Every zone carries body-based boundaries, a 50% mean threshold, a touch count
+// and a flip state, so freshness and quality are properties of everything on the
+// chart.
 zoneSection = "Zones (OB / Breaker / Mitigation)"
 showZones = input.bool(true, "Show Zones", group=zoneSection)
 zoneUseWicks = input.bool(false, "Use Wick Boundaries", group=zoneSection, tooltip="Off = body-based zone (open to close of the origin candle), which is the boundary that actually holds. On = the full candle range.")
@@ -234,10 +243,9 @@ showQM = input.bool(true, "Show Quasimodo Patterns", group=qmSection)
 qmMinSweepATR = input.float(0.10, "Min Head Sweep Depth (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=qmSection, tooltip="How far the Head must run beyond the Left Shoulder for the sweep to be meaningful.")
 qmMaxAge = input.int(80, "QM Max Age (bars)", minval=10, maxval=400, group=qmSection)
 
-// ===== PD ARRAY ARSENAL (PHASE 3) =====
-// Every array below is a `kind` on the shared Phase 2 Zone object plus a
-// detection rule. Nothing here builds a parallel zone map, so freshness, touch
-// counting, the 50% mean threshold and the whole lifecycle come for free.
+// ===== PD ARRAY ARSENAL =====
+// Nothing here builds a parallel zone map, so freshness, touch counting, the 50%
+// mean threshold and the whole lifecycle come for free.
 pdSection = "PD Arrays (IFVG / BPR / Unicorn / Blocks)"
 showIFVG = input.bool(true, "Inversion FVGs (IFVG)", group=pdSection, tooltip="A gap that price closed clean through has not been filled, it has failed. It flips polarity and is re-published as a zone facing the other way — failed support becomes resistance.")
 ifvgPierceATR = input.float(0.05, "IFVG Close-Through Depth (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=pdSection, tooltip="How far beyond the far edge the body must close before the gap counts as inverted rather than merely filled.")
@@ -273,6 +281,7 @@ atrTPMultiplier = input.float(3.0, "ATR TP Multiplier", minval=1.0, maxval=10.0,
 // Display Settings
 displaySection = "Display Settings"
 showStatusTable = input.bool(true, "Show Status Table", group=displaySection)
+redrawEveryTick = input.bool(false, "Redraw Every Tick", group=displaySection, tooltip="Off (default): drawings and both panels are rebuilt once per bar. Every detector here is already gated to confirmed bars, so rebuilding on each tick deletes and recreates several hundred boxes, lines and labels to produce an identical picture — it is the dominant cost in real time. On: legacy behaviour, worth having only when Non-Repainting Mode is off and you want intrabar zones to move live.")
 
 
 // ===== ALERT SETTINGS =====
@@ -350,7 +359,7 @@ obBullColor = input.color(color.rgb(0, 150, 136, 70), "Bullish OB Color", group=
 obBearColor = input.color(color.rgb(233, 30, 99, 70), "Bearish OB Color", group=colorSection)
 liqSweepColor = input.color(color.rgb(255, 235, 59, 30), "Liquidity Sweep Color", group=colorSection)
 
-// Phase 2 object colors
+// Zone, CISD and QM colors
 breakerBullColor = input.color(color.rgb(120, 220, 90, 68), "Bullish Breaker Color", group=colorSection)
 breakerBearColor = input.color(color.rgb(255, 120, 40, 68), "Bearish Breaker Color", group=colorSection)
 mitigationBullColor = input.color(color.rgb(90, 170, 255, 74), "Bullish Mitigation Color", group=colorSection)
@@ -361,7 +370,7 @@ cisdBearColor = input.color(color.rgb(255, 90, 130), "Bearish CISD Color", group
 qmBullColor = input.color(color.rgb(90, 255, 160), "Bullish QM Color", group=colorSection)
 qmBearColor = input.color(color.rgb(255, 100, 100), "Bearish QM Color", group=colorSection)
 
-// Phase 3 PD-array colors
+// PD-array colors
 ifvgBullColor = input.color(color.rgb(0, 200, 255, 70), "Bullish IFVG", group=colorSection)
 ifvgBearColor = input.color(color.rgb(255, 0, 120, 70), "Bearish IFVG", group=colorSection)
 bprBullColor = input.color(color.rgb(60, 255, 200, 62), "Bullish BPR", group=colorSection)
@@ -379,7 +388,7 @@ oteBandColor = input.color(color.rgb(255, 200, 60, 86), "OTE Band", group=colorS
 oteLineColor = input.color(color.rgb(255, 200, 60), "OTE Levels", group=colorSection)
 sdProjColor = input.color(color.rgb(120, 220, 255), "SD Projection Levels", group=colorSection)
 
-// Phase 4 — time, liquidity pool, DOL and named-pattern colors
+// Time, liquidity pool, DOL and named-pattern colors
 lnCloseSessionColor = input.color(color.rgb(120, 90, 200, 92), "London Close BG", group=colorSection)
 macroBGColor = input.color(color.rgb(255, 215, 0, 88), "ICT Macro BG", group=colorSection)
 sbBGColor = input.color(color.rgb(190, 190, 210, 90), "Silver Bullet BG", group=colorSection)
@@ -397,12 +406,11 @@ tsColor = input.color(color.rgb(0, 200, 255), "Turtle Soup", group=colorSection)
 smtBullColor = input.color(color.rgb(90, 255, 200), "Bullish SMT", group=colorSection)
 smtBearColor = input.color(color.rgb(255, 110, 160), "Bearish SMT", group=colorSection)
 
-// Phase 5 — sniper signal colors
+// Sniper signal colors
 sniperBullColor = input.color(color.rgb(0, 230, 118), "Sniper BUY", group=colorSection)
 sniperBearColor = input.color(color.rgb(255, 45, 85), "Sniper SELL", group=colorSection)
 watchMarkColor = input.color(color.rgb(150, 150, 170), "Watch Marker", group=colorSection)
 
-// Apply transparency to colors
 bullishFVGColor = color.new(bullishFVGColorInput, bullishFVGTransp)
 bearishFVGColor = color.new(bearishFVGColorInput, bearishFVGTransp)
 bullishFVGBorderColor = color.new(bullishBorderColorInput, bullishBorderTransp)
@@ -423,7 +431,6 @@ medScoreColor = color.new(medScoreColorInput, medScoreTransp)
 lowScoreColor = color.new(lowScoreColorInput, lowScoreTransp)
 
 // ===== DATA STRUCTURES =====
-// Enhanced Risk Management Levels Structure
 type RiskLevels
     int entryBarIdx
     float entryPrice
@@ -445,10 +452,10 @@ type RiskLevels
     float positionSize
     float entryTime
 
-// FVG Structure
-// start_time / candle3_time are the real chart timestamps of the first and third
-// candle of the gap. Boxes are drawn with xloc.bar_time so HTF zones land on the
-// bars they actually belong to instead of being offset from the chart's bar_index.
+// FVG Structure start_time / candle3_time are the real chart timestamps of the
+// first and third candle of the gap. Boxes are drawn with xloc.bar_time so HTF
+// zones land on the bars they actually belong to instead of being offset from
+// the chart's bar_index.
 type FVG
     int start_idx
     int candle3_idx
@@ -464,21 +471,16 @@ type FVG
     int creation_bar_idx
     float confluenceScore
 
-// Structure for Swing Points
 type SwingPoint
     int index
     float price
     bool isHigh
 
-// ── Shared Zone model (Phase 2) ──────────────────────────────────────────────
-// One object for every price-delivery array in the system. Order blocks,
-// Breakers and Mitigation blocks are all Zones differing only by `kind` and by
-// which state transitions they have been through; Phase 3's IFVG / BPR /
-// Unicorn arrays plug in as further `kind` values with no new machinery.
-//
-// Boundaries are body-based by default (the MSNR insight) with the wick range
-// carried alongside, and `mean` is the 50% mean threshold — the same level as
-// consequent encroachment — which is where entries are actually taken.
+// ── Shared Zone model ──────────────────────────────────────────────
+// One object for every price-delivery array in the system. Boundaries are body-
+// based by default (the MSNR insight) with the wick range carried alongside, and
+// `mean` is the 50% mean threshold — the same level as consequent encroachment —
+// which is where entries are actually taken.
 type Zone
     float top
     float bottom
@@ -498,8 +500,7 @@ type Zone
 
 // ── Liquidity level registry ─────────────────────────────────────────────────
 // Every confirmed pivot becomes a resting level. Levels are either purged (price
-// trades beyond, then closes back inside) or genuinely broken. Phase 4 extends
-// this same registry with EQH/EQL pools, session extremes and PDH/PDL.
+// trades beyond, then closes back inside) or genuinely broken.
 type LiqLevel
     float price
     int barIdx
@@ -553,7 +554,6 @@ type QMPattern
 
 
 // ===== GLOBAL VARIABLES =====
-// Arrays to store data
 var RiskLevels[] riskLevels = array.new<RiskLevels>()
 var FVG[] bullishFVGs = array.new<FVG>()
 var FVG[] bearishFVGs = array.new<FVG>()
@@ -561,17 +561,14 @@ var SwingPoint[] swingPoints = array.new<SwingPoint>()
 var int[] bullEntries = array.new_int()
 var int[] bearEntries = array.new_int()
 
-// Market structure variables
 var string marketStructure = "Neutral"
 
-// Daily loss tracking
 var float dailyLoss = 0.0
 var int lastDayReset = dayofweek
 
-// Position management
 var int[] activePositions = array.new_int(0)
 
-// ===== PHASE 2 ENGINE STATE =====
+// ===== ENGINE STATE =====
 // One zone map for OBs, Breakers and Mitigation blocks
 var Zone[] zones = array.new<Zone>()
 
@@ -598,6 +595,17 @@ var float upRunHigh = na
 var int upRunLen = 0
 var bool upRunBroken = true
 
+// ── Per-bar caches (performance) ─────────────────────────────────────────────
+// Everything downstream reduces to an integer comparison against these.
+var int livePurgeUpBar = na
+var float livePurgeUpWick = na
+var int livePurgeDnBar = na
+var float livePurgeDnWick = na
+// Whether a live higher-timeframe gap exists on each side. The sniper cascade
+// asked this once per direction, and each ask walked the whole gap array.
+var bool itfGapBull = false
+var bool itfGapBear = false
+
 // Latest event summaries, surfaced on the dashboard and reused by later phases
 var string lastCISDDir = "None"
 var int lastCISDBar = na
@@ -616,7 +624,7 @@ var label[] fvgLabelRefs = array.new<label>()
 var label[] sweepLabelRefs = array.new<label>()
 var line[] sweepLineRefs = array.new<line>()
 
-// Phase 2 drawing references
+// Zone / CISD / QM drawing references
 var box[] zoneBoxRefs = array.new<box>()
 var label[] zoneLabelRefs = array.new<label>()
 var line[] zoneLineRefs = array.new<line>()
@@ -625,7 +633,7 @@ var label[] cisdLabelRefs = array.new<label>()
 var line[] qmLineRefs = array.new<line>()
 var label[] qmLabelRefs = array.new<label>()
 
-// Phase 3 drawing references
+// FVG-CE and OTE drawing references
 var line[] fvgCELineRefs = array.new<line>()
 var box[] oteBoxRefs = array.new<box>()
 var line[] oteLineRefs = array.new<line>()
@@ -655,10 +663,23 @@ volUnit = math.max(nz(atrRef), syminfo.mintick * 10)
 tapTol = tapToleranceATR * volUnit
 
 // ===== NON-REPAINT GATE =====
-// barstate.isconfirmed is always true on historical bars, so historical output is
-// unchanged; only the live forming bar is held back until it closes.
+// barstate.isconfirmed is always true on historical bars, so historical output
+// is unchanged; only the live forming bar is held back until it closes.
 barConfirmed = barstate.isconfirmed
 canDetect = not nonRepaintMode or barConfirmed
+
+// Is the Multi-Timeframe setting actually above the chart? When there is no
+// genuine intermediate term, that gate has nothing to check and stands down.
+htfIsHigher = timeframe.in_seconds(higherTF) > timeframe.in_seconds()
+
+// ===== REDRAW GATE =====
+// Since every detector in this script is gated on confirmed bars, all of that
+// work produced a picture identical to the one already on screen. This gate lets
+// the rebuild happen once per bar instead.
+var int lastUIBar = -1
+uiRedraw = barstate.islast and (redrawEveryTick or not nonRepaintMode or barConfirmed or lastUIBar != bar_index)
+if uiRedraw
+    lastUIBar := bar_index
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIME ENGINE — KILLZONES, MACROS, SILVER BULLET, TRUE DAY OPEN, ASIAN RANGE
@@ -666,10 +687,8 @@ canDetect = not nonRepaintMode or barConfirmed
 // Placed ahead of everything else because time is not a filter bolted on at the
 // end — the window a setup forms in is part of what the setup *is*, and session
 // timing is one of the confluence factors scored further down this file.
-//
 // time(timeframe.period, session, timezone) returns na outside its window, so a
-// na-test is the membership test. The timezone argument is what makes the map
-// DST-correct: New York's own calendar moves the windows, not us.
+// na-test is the membership test.
 inLondonKZ = not na(time(timeframe.period, kzLondonStr, ictTZ))
 inNYAMKZ = not na(time(timeframe.period, kzNYAMStr, ictTZ))
 inLNCloseKZ = not na(time(timeframe.period, kzLNCloseStr, ictTZ))
@@ -681,8 +700,6 @@ inAnyKZ = inLondonKZ or inNYAMKZ or inLNCloseKZ or inAsiaKZ
 // to liquidity. Named individually because *which* macro is live matters: the
 // 09:50 and 10:50 windows carry the New York AM expansion, the 02:33 and 04:03
 // windows belong to London, and the afternoon pair runs into the futures close.
-// A 20-minute window cannot be resolved by a bar longer than it is, so macros
-// simply do not apply above the 15-minute chart.
 macroTFOK = timeframe.isintraday and timeframe.in_seconds() <= 900
 mLon1 = macroTFOK and not na(time(timeframe.period, "0233-0300", ictTZ))
 mLon2 = macroTFOK and not na(time(timeframe.period, "0403-0430", ictTZ))
@@ -740,16 +757,12 @@ if inAsiaKZ
     asiaEndBar := bar_index
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PHASE 4 DATA REQUESTS — HTF LEVELS AND THE CORRELATED INSTRUMENT
+// DATA REQUESTS — HTF LEVELS AND THE CORRELATED INSTRUMENT
 // ═══════════════════════════════════════════════════════════════════════════
 // Four request.security() calls total, well inside the 40-call limit, and all of
 // them hoisted to the global scope so no stateful call ever lives in a branch.
-//
 // The previous-period extremes use lookahead_on *together with* a [1] offset on
-// the expression. That pairing is the documented non-repainting idiom: the value
-// being read is from a period that has already completed, so there is nothing to
-// look ahead into, and it becomes available on the first bar of the new period
-// rather than lagging a full period behind as lookahead_off would.
+// the expression.
 [pdhRaw, pdlRaw] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
 [pwhRaw, pwlRaw] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_on)
 [pmhRaw, pmlRaw] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_on)
@@ -786,20 +799,17 @@ smtSymUsed = smtMode == "Manual" ? smtSymbolInput : autoSmtSym
 // script out; it returns na and SMT reports itself unavailable instead.
 [smtHRaw, smtLRaw] = request.security(smtSymUsed, timeframe.period, [high, low], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
 smtInverse = smtCorrMode == "Inverse" or (smtCorrMode == "Auto" and smtMode != "Manual" and autoSmtInverse)
-// Negating an inverse partner normalises it, so one set of higher-high /
-// lower-low comparisons covers both correlation types.
+// Negating an inverse partner normalises it, so one set of higher-high / lower-
+// low comparisons covers both correlation types.
 smtHAdj = smtInverse ? -smtLRaw : smtHRaw
 smtLAdj = smtInverse ? -smtHRaw : smtLRaw
 smtAvailable = smtMode != "Off" and smtSymUsed != syminfo.tickerid and not na(smtHRaw)
 
-// ── Higher timeframe bias (Phase 5) ──
+// ── Higher timeframe bias ──
 // The top of the cascade. The structure engine itself is stateful global code
 // and cannot be evaluated inside a request, so the bias is derived the way a
 // break of structure is defined in the first place: a higher-timeframe close
-// beyond the extreme of the preceding htfBiasLen bars up there. The [1] offset
-// keeps the reference window closed, and the bias then *latches* — it stays
-// bullish until price closes below the opposing extreme, which is exactly how a
-// BOS holds until a CHoCH replaces it.
+// beyond the extreme of the preceding htfBiasLen bars up there.
 [htfBiasClose, htfBiasHi, htfBiasLo] = request.security(syminfo.tickerid, htfBiasTF, [close, ta.highest(high, htfBiasLen)[1], ta.lowest(low, htfBiasLen)[1]], lookahead=barmerge.lookahead_off)
 var int htfBias = 0
 if not na(htfBiasClose)
@@ -857,7 +867,7 @@ var bool inDiscount = false
 var FVG[] bullTriggerRef = array.new<FVG>()
 var FVG[] bearTriggerRef = array.new<FVG>()
 
-// ── OTE leg and its standard deviation projections (Phase 3) ─────────────────
+// ── OTE leg and its standard deviation projections ─────────────────
 // Declared here rather than where they are computed, because createRiskLevel()
 // reads them for TP2/TP3 and Pine resolves identifiers in file order. The values
 // are assigned in the engine section, after the dealing range that defines the
@@ -873,7 +883,7 @@ var float sd05 = na
 var float sd10 = na
 var float sd20 = na
 
-// ── Phase 4 state: pools, Draw on Liquidity, named time patterns, SMT ────────
+// ── Pools, Draw on Liquidity, named time patterns, SMT ──────────────────────
 // Declared here with the rest of the engine state rather than beside the logic
 // that fills them, because updateStatusTable() is defined long before the Phase
 // 4 engine section runs and Pine resolves identifiers in file order — a var
@@ -933,7 +943,7 @@ var string smtDir = "None"
 var int smtBar = na
 var string smtNote = ""
 
-// Phase 4 drawing references
+// Pool / HTF-level / DOL drawing references
 var line[] poolLineRefs = array.new<line>()
 var label[] poolLabelRefs = array.new<label>()
 var line[] htfLineRefs = array.new<line>()
@@ -946,16 +956,16 @@ var label[] dolLabelRefs = array.new<label>()
 var line[] timeLineRefs = array.new<line>()
 var label[] timeLabelRefs = array.new<label>()
 // Judas, Turtle Soup and SMT are drawn on the bar they happen rather than
-// redrawn on the last bar — the same treatment structure breaks get, because
-// the mark belongs to that candle — so they share one capped pool of labels.
+// redrawn on the last bar — the same treatment structure breaks get, because the
+// mark belongs to that candle — so they share one capped pool of labels.
 var label[] eventLabelRefs = array.new<label>()
 
-// ── Phase 5 state: the sniper engine's last verdict ─────────────────────────
+// ── The sniper engine's last verdict ────────────────────────────────────────
 // The gate results live in bool arrays rather than a dozen scalars so the
-// dashboard checklist can walk them by index and stay in step with the engine
-// automatically. Index order is the cascade order, top-down:
-//   0 HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone
-//   4 structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 array tap
+// dashboard can walk them by index and name the first that failed without
+// knowing anything about what the gates are. Index order is the cascade order: 0
+// HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone 4
+// structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 array tap
 var bool[] gateL = array.new_bool(9, false)
 var bool[] gateS = array.new_bool(9, false)
 var int lastSniperBar = na
@@ -975,32 +985,30 @@ var float watchScoreL = 0.0
 var float watchScoreS = 0.0
 var string watchModelL = ""
 var string watchModelS = ""
-var float liveScoreL = 0.0
-var float liveScoreS = 0.0
+var float bestScoreSeen = 0.0
+var int sniperEvalBars = 0
+var int cascadePassBars = 0
+var int signalCount = 0
 var label[] sniperLabelRefs = array.new<label>()
 var label[] watchLabelRefs = array.new<label>()
 
 
 
 
+
 // ===== HELPER FUNCTIONS =====
-// Helper function to get current position count
 getCurrentPositions() =>
     array.size(activePositions)
 
-// Helper function to add position
 addPosition() =>
     array.push(activePositions, bar_index)
-    // Clean up old positions
     if array.size(activePositions) > maxConcurrentPositions * 2
         array.shift(activePositions)
 
-// Helper function to remove position
 removePosition() =>
     if array.size(activePositions) > 0
         array.pop(activePositions)
 
-// Check if max concurrent positions reached
 isMaxPositionsReached() =>
     getCurrentPositions() >= maxConcurrentPositions
 
@@ -1038,7 +1046,6 @@ capBoxes(array<box> refs, int maxN) =>
     while array.size(refs) > maxN
         box.delete(array.shift(refs))
 
-// Reset daily loss counter at start of new day
 resetDailyLoss() =>
     dayofweek != lastDayReset
 
@@ -1047,8 +1054,7 @@ resetDailyLoss() =>
 rsiValue = ta.rsi(close, 14)
 volSMA = ta.sma(volume, 20)
 
-// Factor 1: Trend Alignment (0.0 - 1.0)
-// Full score when FVG direction aligns with market structure
+// Factor 1: Trend Alignment
 scoreTrendAlignment(fvgType) =>
     if fvgType == "BISI" and marketStructure == "Uptrend"
         1.0
@@ -1059,11 +1065,7 @@ scoreTrendAlignment(fvgType) =>
     else
         0.1  // Counter-trend = low score
 
-// Factor 2: RSI Condition (0.0 - 1.0)
-// Scored as a pullback/exhaustion filter rather than mean reversion. A bullish
-// setup is best on a healthy pullback (RSI 40-65): chasing an overbought market
-// and catching a collapsing one both score poorly. Mean-reversion scoring here
-// directly contradicted the trend-alignment factor, so the two cancelled out.
+// Factor 2: RSI as a pullback filter
 scoreRSI(fvgType) =>
     if fvgType == "BISI"
         if rsiValue >= 45 and rsiValue <= 62
@@ -1092,8 +1094,7 @@ scoreRSI(fvgType) =>
         else
             0.15
 
-// Factor 3: Volume Confirmation (0.0 - 1.0)
-// Higher score when volume exceeds its moving average
+// Factor 3: Volume Confirmation
 scoreVolume() =>
     if na(volSMA) or volSMA == 0
         0.5
@@ -1110,8 +1111,7 @@ scoreVolume() =>
         else
             0.2
 
-// Factor 4: FVG Variant Quality (0.0 - 1.0)
-// Perfect FVGs are highest quality, Rejection lowest
+// Factor 4: FVG Variant Quality
 scoreVariant(variant) =>
     if variant == "Perfect"
         1.0
@@ -1122,10 +1122,7 @@ scoreVariant(variant) =>
     else
         0.3
 
-// Factor 5: Session Timing (0.0 - 1.0)
-// Rebuilt on the killzone map rather than on fixed UTC hours. The ranking is the
-// methodology's own: a macro window inside a killzone is the most precise time
-// the algorithm is known to act, an unscheduled hour the least.
+// Factor 5: Session Timing, read off the killzone map
 scoreSession() =>
     if inMacro
         1.0
@@ -1142,8 +1139,7 @@ scoreSession() =>
     else
         0.2
 
-// Factor 6: Volatility Regime (0.0 - 1.0)
-// Healthy volatility (ATR near its average) scores best; extremes score lower
+// Factor 6: Volatility Regime
 scoreVolatility() =>
     if na(atrRefSMA) or atrRefSMA == 0
         0.5
@@ -1160,7 +1156,6 @@ scoreVolatility() =>
         else
             0.2  // Dead market
 
-// Master: Calculate Confluence Score (0 - 100)
 calculateConfluenceScore(fvgType, fvgVariant) =>
     totalWeight = weightTrend + weightRSI + weightVolume + weightVariant + weightSession + weightVolatility
     safeTotal = math.max(totalWeight, 1.0)
@@ -1175,7 +1170,6 @@ calculateConfluenceScore(fvgType, fvgVariant) =>
     rawScore = (s1 + s2 + s3 + s4 + s5 + s6) / safeTotal * 100
     math.round(math.max(0.0, math.min(100.0, rawScore)), 0)
 
-// Get color based on confluence score tier
 getScoreColor(score) =>
     if score >= 70
         highScoreColor
@@ -1184,7 +1178,6 @@ getScoreColor(score) =>
     else
         lowScoreColor
 
-// Get score tier label
 getScoreTier(score) =>
     if score >= 70
         "A"
@@ -1194,9 +1187,6 @@ getScoreTier(score) =>
         "C"
 
 // Calculate position size based on volatility and risk per trade.
-// Uses the globally hoisted atrRef / atrRefSMA: calling ta.atr() inside this
-// conditional branch made the averages update only on the bars where the branch
-// executed, which silently produced wrong values.
 calculatePositionSize(entryPrice, stopPrice) =>
     if not useVolatilityBasedSizing or na(atrRefSMA) or atrRefSMA == 0
         1.0
@@ -1245,14 +1235,13 @@ getSessionBGColor() =>
 // ═══════════════════════════════════════════════════════════════════════════
 // LIQUIDITY PURGE ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
-// The old detector asked "does this candle have a long wick?", which cannot
-// distinguish a purge from a genuine breakout and never knew *which* level was
-// taken. This one tracks real resting liquidity and requires the two-part ICT
-// sequence: trade beyond the level, then close back inside it.
+// This one tracks real resting liquidity and requires the two-part ICT sequence:
+// trade beyond the level, then close back inside it.
 
 // Merge a newly confirmed pivot into the level registry. Pivots within the
 // cluster tolerance are one level with a higher strength (an equal-highs /
-// equal-lows pool) rather than several duplicates that each fire their own purge.
+// equal-lows pool) rather than several duplicates that each fire their own
+// purge.
 registerLiqLevel(int idx, float price, bool isHigh, bool major) =>
     tol = sweepClusterATR * volUnit
     merged = false
@@ -1332,26 +1321,16 @@ cleanPurges() =>
                 else if s.dir == 1 and close < s.wickExtreme
                     s.invalidated := true
 
-// Was liquidity taken in this direction within `window` bars?
-// dir +1 = sellside purge (lows taken, expect up), -1 = buyside purge.
+// Was liquidity taken in this direction within `window` bars? dir +1 = sellside
+// purge (lows taken, expect up), -1 = buyside purge.
 purgedRecently(int dir, int window) =>
-    found = false
-    for s in liqSweeps
-        if s.dir == dir and not s.invalidated and bar_index - s.confirmBar <= window
-            found := true
-            break
-    found
+    b = dir == 1 ? livePurgeUpBar : livePurgeDnBar
+    not na(b) and bar_index - b <= window
 
 // The furthest wick of the most recent live purge in a direction — the
 // invalidation point every reversal model measures its stop from.
 purgeStopRef(int dir) =>
-    float ref = na
-    int newest = -1
-    for s in liqSweeps
-        if s.dir == dir and not s.invalidated and s.confirmBar > newest
-            newest := s.confirmBar
-            ref := s.wickExtreme
-    ref
+    dir == 1 ? livePurgeUpWick : livePurgeDnWick
 
 drawPurges() =>
     clearLabels(sweepLabelRefs)
@@ -1380,7 +1359,8 @@ drawCISD() =>
             if bar_index - e.barIdx <= cisdMaxAge
                 isBull = e.dir == 1
                 col = isBull ? cisdBullColor : cisdBearColor
-                // The CISD level runs from the start of the delivery run it broke
+                // The CISD level runs from the start of the delivery run it
+                // broke
                 ln = line.new(e.runStart, e.level, e.barIdx + 3, e.level, color=col, width=2)
                 tag = "CISD " + (isBull ? "▲" : "▼") + (e.displaced ? " ✦" : "") + (e.purged ? " ⓟ" : "")
                 lbl = label.new(e.barIdx, e.level, tag, style=isBull ? label.style_label_up : label.style_label_down, color=color.new(col, 25), textcolor=color.black, size=size.tiny)
@@ -1392,22 +1372,11 @@ drawCISD() =>
 // ═══════════════════════════════════════════════════════════════════════════
 // ZONE ENGINE — ORDER BLOCKS, MITIGATION BLOCKS, BREAKERS
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Generic constructor for every PD array ───────────────────────────────────
 // A zone is only created when a displacement leg *breaks structure*. The origin
 // candle is the last opposite-colour candle before that leg, which the delivery
 // run tracker already knows: the leg is the run, so the origin sits immediately
 // before the run started.
-// ── Generic constructor for every Phase 3 PD array ───────────────────────────
-// Order blocks keep their own builder below because they need the origin
-// candle's body/wick split. Everything else — IFVG, BPR, Unicorn, Rejection,
-// Volume Imbalance and the opening gaps — is a price range plus a `kind`, so it
-// comes through here and inherits the entire Phase 2 lifecycle unchanged.
-//
-// Dedupe is by kind + direction against either the same origin bar or a
-// materially identical price band, so a level that keeps re-qualifying stacks
-// one zone deep instead of twenty.
-//
-// Callers must finish iterating `zones` before calling this: it pushes, and the
-// push only happens after this function's own scan has ended.
 addZone(float zTop, float zBot, string kind, int dir, int cBar, string origin) =>
     bool made = false
     if not na(zTop) and not na(zBot) and zTop - zBot >= syminfo.mintick and not na(cBar)
@@ -1422,9 +1391,7 @@ addZone(float zTop, float zBot, string kind, int dir, int cBar, string origin) =
             made := true
     made
 
-// Quality tier, 1 (weakest) to 5 (Unicorn). Being tested costs a tier, so a
-// touched Unicorn ranks alongside a fresh order block — which is the honest
-// comparison, and it is what the Phase 5 stack score will read.
+// Quality tier, 1 (weakest) to 5 (Unicorn).
 zoneTier(Zone z) =>
     base = z.kind == "Unicorn" ? 5 : z.kind == "BPR" or z.kind == "Breaker" or z.kind == "Propulsion" ? 4 : z.kind == "OB" or z.kind == "IFVG" ? 3 : z.kind == "Mitigation" or z.kind == "Rejection" ? 2 : 1
     int tier = base - (z.touches > 0 ? 1 : 0)
@@ -1499,18 +1466,21 @@ createZone(int off, int dir, string origin) =>
             bodyBot = math.min(open[off], close[off])
             float zTop = zoneUseWicks ? wTop : bodyTop
             float zBot = zoneUseWicks ? wBot : bodyBot
-            // A doji origin would give a zero-height zone, so fall back to its range
+            // A doji origin would give a zero-height zone, so fall back to its
+            // range
             if zTop - zBot < syminfo.mintick
                 zTop := wTop
                 zBot := wBot
-            // The leg away from the origin candle is what makes it an order block
+            // The leg away from the origin candle is what makes it an order
+            // block
             legSpan = dir == 1 ? high - low[off] : high[off] - low
             if zTop > zBot and legSpan >= zoneMinImpulseATR * volUnit
                 tookLiq = legTookLiquidity(off, dir == 1)
-                // A block that forms inside a live block of the same direction is
-                // a propulsion block: the algorithm coming back to its own level
-                // to continue delivery rather than to reverse off it. Scanned
-                // here, before the push, so `zones` is never mutated mid-loop.
+                // A block that forms inside a live block of the same direction
+                // is a propulsion block: the algorithm coming back to its own
+                // level to continue delivery rather than to reverse off it.
+                // Scanned here, before the push, so `zones` is never mutated
+                // mid-loop.
                 nested = false
                 if showPropulsion
                     for zp in zones
@@ -1522,11 +1492,9 @@ createZone(int off, int dir, string origin) =>
 
 // Lifecycle: freshness, touch counting, and the Breaker transition. A violated
 // zone only becomes a Breaker if structure confirmed the new direction — failed
-// supply turning into demand. Without that confirmation it is simply spent.
+// supply turning into demand.
 updateZones() =>
-    // Phase 3 puts many more kinds through this map than Phase 2 did, so the
-    // working set is deeper than the drawn set. Drawing is still capped at
-    // maxZones; this only bounds memory.
+    // Drawing is still capped at maxZones; this only bounds memory.
     while array.size(zones) > maxZones * 6
         array.shift(zones)
 
@@ -1544,19 +1512,17 @@ updateZones() =>
                 continue
 
             structFresh = not na(lastAnyStructBar) and bar_index - lastAnyStructBar <= breakerWindow
-            // Opening gaps are reference levels rather than tradeable blocks that
-            // get spent: price passes back and forth through an NWOG all week and
-            // the level still draws price. They age out; they are never violated
-            // and never exhausted by touches.
+            // Opening gaps are reference levels rather than tradeable blocks
+            // that get spent: price passes back and forth through an NWOG all
+            // week and the level still draws price. They age out; they are never
+            // violated and never exhausted by touches.
             isRef = z.kind == "NDOG" or z.kind == "NWOG"
             violated = not isRef and (z.dir == 1 ? close < z.bottom : close > z.top)
 
             if violated
                 // A violated zone only becomes a Breaker if structure confirmed
                 // the new direction — failed supply turning into demand. Without
-                // that confirmation the zone is simply spent. Only an order block
-                // can make that transition: that is what the term means, and an
-                // IFVG or a BPR that fails is finished rather than reborn.
+                // that confirmation the zone is simply spent.
                 canFlip = not z.flipped and showBreakers and (z.kind == "OB" or z.kind == "Propulsion") and structFresh and lastAnyStructDir == (z.dir == 1 ? "Bearish" : "Bullish")
                 if canFlip
                     z.kind := "Breaker"
@@ -1613,7 +1579,8 @@ drawZones() =>
                     if (pass == 0 and tier < 4) or (pass == 1 and tier >= 4)
                         continue
                     bg = zoneColorFor(z)
-                    // Fresh zones get a solid, heavier border; used zones fade back
+                    // Fresh zones get a solid, heavier border; used zones fade
+                    // back
                     bx = box.new(z.createdBar, z.top, bar_index, z.bottom, bgcolor=bg, border_color=color.new(bg, 25), border_width=z.touches == 0 ? 2 : 1, border_style=z.touches == 0 ? line.style_solid : line.style_dashed)
                     array.push(zoneBoxRefs, bx)
                     // The mean threshold is the consequent encroachment of the
@@ -1675,7 +1642,8 @@ drawQM() =>
 
 // A bullish and a bearish FVG that overlap. The overlap itself is the array:
 // price delivered inefficiently in both directions through the same band, and it
-// is the newer gap that sets the direction because that is the leg that reversed.
+// is the newer gap that sets the direction because that is the leg that
+// reversed.
 pairBPR(FVG f, int dir, array<FVG> opp) =>
     float bTop = na
     float bBot = na
@@ -1700,10 +1668,7 @@ pairBPR(FVG f, int dir, array<FVG> opp) =>
 
 // Unicorn: a breaker block overlapping a same-direction FVG. The breaker says
 // structure failed and reversed, the gap says the reversal was delivered with
-// displacement, and the band they share is where both statements are true. This
-// is the top tier array in the engine.
-//
-// Called on the bar a new gap forms, testing it against the live breakers.
+// displacement, and the band they share is where both statements are true.
 pairUnicornForFVG(FVG f, int dir) =>
     float uTop = na
     float uBot = na
@@ -1785,11 +1750,8 @@ drawOTE() =>
             array.push(oteLabelRefs, label.new(bar_index, sd20, "-2 SD", style=label.style_label_left, color=color.new(sdProjColor, 45), textcolor=color.black, size=size.tiny))
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LIQUIDITY POOLS, HTF LEVELS AND THE DRAW ON LIQUIDITY  (PHASE 4)
+// LIQUIDITY POOLS, HTF LEVELS AND THE DRAW ON LIQUIDITY
 // ═══════════════════════════════════════════════════════════════════════════
-// The registry built in Phase 2 already merges pivots inside the cluster
-// tolerance into a single level and counts how many merged, so an equal-highs
-// pool is simply a registry entry whose strength has grown past the threshold.
 // Nothing new has to be detected — the pool was already there, unnamed.
 
 // One event label, drawn on the bar the event happened, sharing a capped pool.
@@ -1799,23 +1761,17 @@ eventLabel(int bIdx, float px, string txt, color col, bool up) =>
     capLabels(eventLabelRefs, 18)
 
 // ── Magnetism ────────────────────────────────────────────────────────────────
-// Every unswept pool is a candidate objective; the question the DOL engine
-// answers is which one price is actually being delivered towards. Magnetism is
-// scored from five independent things:
-//
+// Every unswept pool is a candidate objective; the question is which one price
+// is actually being delivered towards. Five independent terms:
 //   base       what kind of level it is — a previous month high outranks an
 //              internal pivot by a wide margin
-//   cluster    how many pivots built it, because an equal-highs pool is a stack
-//              of stops rather than a single order
-//   age        liquidity that has rested untouched for longer is worth more to
-//              the algorithm than something printed twenty bars ago
-//   proximity  near levels pull harder, decaying smoothly so that two pools of
-//              the same kind are separated by distance and nothing else
-//   bias       premium/discount position and the swing trend tilt the ranking,
-//              which is what stops the engine naming a target behind price
-//
-// Anything inside dolMinDistATR is already in reach and is not an objective
-// worth taking a trade for, and anything past dolMaxDistATR is scenery.
+//   cluster    how many pivots built it: an equal-highs pool is a stack of stops
+//   age        liquidity that has rested untouched for longer is worth more
+//   proximity  near levels pull harder, decaying smoothly
+//   bias       premium/discount position and swing trend tilt the ranking, which
+//              is what stops the engine naming a target behind price
+// Inside dolMinDistATR is already in reach and not worth a trade; past
+// dolMaxDistATR is scenery.
 poolMagnetism(float px, bool isHigh, float baseW, int ageBars, int strength) =>
     float sc = 0.0
     dist = math.abs(px - close) / math.max(volUnit, syminfo.mintick)
@@ -1836,9 +1792,6 @@ poolMagnetism(float px, bool isHigh, float baseW, int ageBars, int strength) =>
 // Add one fixed reference level (PDH/PDL, PWH/PWL, PMH/PML, Asian range edge) to
 // the DOL candidate buffer. Functions may mutate a global collection, which is
 // what lets this stay a one-line call per level instead of five parallel pushes.
-// A high level price has already traded above, or a low it has traded below, is
-// spent: the orders that rested there are filled. Only untaken levels can be a
-// draw, so the side test is the filter rather than a scoring penalty.
 pushRef(float px, string nm, float w, int ageBars, bool isHigh) =>
     if not na(px) and (isHigh ? px > close : px < close)
         array.push(refPx, px)
@@ -1931,7 +1884,8 @@ drawTimeAndDOL() =>
             array.push(dolLabelRefs, label.new(bar_index + 12, altPx, altNm, style=label.style_label_left, color=color.new(altCol, 60), textcolor=color.white, size=size.tiny))
 
 // ===== SMART ATR-BASED SL/TP =====
-// Distances scale with the instrument's own ATR, so no per-symbol boost is needed.
+// Distances scale with the instrument's own ATR, so no per-symbol boost is
+// needed.
 getSmartATRSL() =>
     not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrSLMultiplier
 
@@ -1939,13 +1893,12 @@ getSmartATRTP() =>
     not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrTPMultiplier
 
 // ===== FVG DETECTION AND MANAGEMENT =====
-// gapThreshold is supplied by the caller in the price units of the context being
-// scanned (chart ATR for the chart timeframe, HTF ATR for the higher timeframe),
-// which replaces the old hardcoded gold-points / percentage split.
-// t0 and t2 are the timestamps of the third and first candle of the gap.
-detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
-    newBullishFVGs = array.new<FVG>()
-    newBearishFVGs = array.new<FVG>()
+// t0 and t2 are the timestamps of the third and first candle of the gap. Writes
+// into two buffers the caller owns rather than allocating a fresh pair every
+// bar.
+detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0, array<FVG> outBull, array<FVG> outBear) =>
+    array.clear(outBull)
+    array.clear(outBear)
 
     minGap = math.max(nz(gapThreshold), syminfo.mintick)
 
@@ -1959,7 +1912,7 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) < nz(l[0]) + (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
                 newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("BISI", variant))
-                array.push(newBullishFVGs, newFVG)
+                array.push(outBull, newFVG)
 
         if detectSIBI
             gapDn = nz(l[2]) - nz(h[0])
@@ -1970,13 +1923,12 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) > nz(h[0]) - (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
                 newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("SIBI", variant))
-                array.push(newBearishFVGs, newFVG)
-    [newBullishFVGs, newBearishFVGs]
+                array.push(outBear, newFVG)
+    array.size(outBull) + array.size(outBear)
 
 processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
-    // Trim down to the cap in one pass. The old single remove() could not keep up
-    // if more than one zone was added on the same bar.
-    while array.size(fvgArray) > 200
+    // Trim down to the cap in one pass.
+    while array.size(fvgArray) > maxTrackedFVGs
         array.shift(fvgArray)
 
     ifvgDepth = ifvgPierceATR * volUnit
@@ -2024,8 +1976,7 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
                     // Deliberately not removed when showMitigated is off. A
                     // filled gap is still a candidate for inversion, and the
                     // drawing pass already skips mitigated gaps, so keeping it
-                    // costs nothing visually and preserves the IFVG path. Age-out
-                    // and the 200-deep cap retire it.
+                    // costs nothing visually and preserves the IFVG path.
 
 // ===== DRAWING FUNCTIONS =====
 drawFVGs() =>
@@ -2060,7 +2011,8 @@ drawFVGs() =>
 
             boxBgColor = color.new(boxColor, currentAlpha)
             boxBorderColor = color.new(borderColor, fvg.mitigated and showMitigated ? mitigatedAlpha : 20)
-            // Time coordinates keep HTF zones anchored to the bars they belong to.
+            // Time coordinates keep HTF zones anchored to the bars they belong
+            // to.
             right_time = extendFVG ? time : fvg.candle3_time
             if right_time < fvg.candle3_time
                 right_time := fvg.candle3_time
@@ -2141,15 +2093,8 @@ drawFVGs() =>
                 htfLabel = label.new(fvg.candle3_time, fvg.bottom, labelText, xloc=xloc.bar_time, style=label.style_label_up, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
                 array.push(fvgLabelRefs, htfLabel)
 
-    // A 200-deep FVG array can emit two labels each, which would consume the
-    // entire 500-label budget and silently push the structure, zone, purge, CISD
-    // and QM annotations off the chart. Cap the oldest away to keep headroom:
-    // with every slider at maximum the tracked label total stays under 500.
-    // Phase 3 added the OTE/SD labels to that total and Phase 4 added the pool,
-    // HTF-level, Asian range, DOL, True Day Open and named-event labels, so the
-    // FVG share comes down by the same amount, and Phase 5's signal and watch
-    // labels take another slice: they are the engine's actual output, so the FVG
-    // score tags are the right thing to give up. With every slider at maximum the
+    // Cap the oldest away to keep headroom: with every slider at maximum the
+    // tracked label total stays under 500. With every slider at maximum the
     // tracked label total lands just under 500.
     capBoxes(fvgBoxRefs, 240)
     capLabels(fvgLabelRefs, 50)
@@ -2165,8 +2110,6 @@ generateEntrySignals() =>
     array.clear(bearTriggerRef)
 
     // canDetect holds signals back until the bar closes in non-repainting mode.
-    // showLegacySignals keeps this path dark unless it is asked for: the Phase 5
-    // sniper engine is the primary signal, and this one fires on a far lower bar.
     if not showEntrySignals or not showLegacySignals or isMaxPositionsReached() or not canDetect
         [bullEntries, bearEntries]
     else
@@ -2175,23 +2118,20 @@ generateEntrySignals() =>
             if bullishSize > 0
                 for i = 0 to bullishSize - 1
                     fvg = array.get(bullishFVGs, i)
-                    // A gap mitigated on an earlier bar is spent. A gap mitigated
-                    // on this bar was mitigated *by the tap being evaluated right
-                    // now* — reaching consequent encroachment is both the entry
-                    // trigger and the mitigation event, so it still counts.
+                    // A gap mitigated on an earlier bar is spent. A gap
+                    // mitigated on this bar was mitigated *by the tap being
+                    // evaluated right now* — reaching consequent encroachment is
+                    // both the entry trigger and the mitigation event, so it
+                    // still counts.
                     if fvg.mitigated and (na(fvg.mitigatedBar) or fvg.mitigatedBar < bar_index)
                         continue
                     if fvg.confluenceScore < minConfluenceScore
                         continue
 
                     entrySignal = false
-                    // ATR-scaled tolerance. The old `fvg.bottom * 0.95` was a
-                    // 165-point window on gold at 3300 and a 0.05 window on EURUSD.
-                    //
-                    // Consequent encroachment: with requireCETap on, the tap has
-                    // to reach the gap's 50% line rather than merely graze its
-                    // upper edge. Fewer signals, and every one of them filled at
-                    // a materially better price.
+                    // ATR-scaled tolerance. Consequent encroachment: with
+                    // requireCETap on, the tap has to reach the gap's 50% line
+                    // rather than merely graze its upper edge.
                     fvgCE = math.avg(fvg.top, fvg.bottom)
                     tapUpper = requireCETap ? fvgCE : fvg.top
                     tappedZone = low <= tapUpper + tapTol and low >= fvg.bottom - tapTol and close > open
@@ -2268,9 +2208,6 @@ generateEntrySignals() =>
 
 // ===== RISK MANAGEMENT =====
 // The partial-target lines are deleted unconditionally when a trade closes.
-// They used to be deleted only when showPartialTP was on, but they are created
-// either way — as invisible placeholders when it is off — so with the setting
-// disabled every closed trade leaked three lines against the 500-line budget.
 updateRiskManagementLines() =>
     if array.size(riskLevels) > 0
         for i = array.size(riskLevels) - 1 to 0
@@ -2288,9 +2225,9 @@ updateRiskManagementLines() =>
                     line.delete(riskLevel.partialLine3)
             
             // The entry bar is excluded from the hit test. The fill is at that
-            // bar's close, so the wick that tapped the array — the very move that
-            // produced the signal — must not be allowed to stop the trade out
-            // before it has begun.
+            // bar's close, so the wick that tapped the array — the very move
+            // that produced the signal — must not be allowed to stop the trade
+            // out before it has begun.
             if riskLevel.active and riskLevel.signalType == "BUY" and bar_index > riskLevel.entryBarIdx
                 if high >= riskLevel.tpPrice or low <= riskLevel.slPrice
                     riskLevel.active := false
@@ -2414,12 +2351,11 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
             partialTpPrice2 := entryPrice - (slDistance * 0.75)
             partialTpPrice3 := entryPrice - (slDistance * 1.5)
 
-        // ── Standard deviation objectives (Phase 3) ──
-        // 0.75R and 1.5R were arbitrary numbers that had nothing to do with the
-        // market being traded. The current impulse leg projected past its own
-        // extreme at 1 and 2 standard deviations is a real ICT objective, so it
-        // takes over TP2/TP3 whenever the leg runs the trade's way. When it does
-        // not, the R-multiples above stand as the fallback.
+        // ── Standard deviation objectives ──
+        // The current impulse leg projected past its own extreme at 1 and 2
+        // standard deviations is a real ICT objective, so it takes over TP2/TP3
+        // whenever the leg runs the trade's way. When it does not, the
+        // R-multiples above stand as the fallback.
         if useSDTargets and oteValid and oteDir == (isLong ? 1 : -1)
             if isLong
                 if not na(sd10) and sd10 > entryPrice
@@ -2432,13 +2368,12 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
                 if not na(sd20) and sd20 < partialTpPrice2
                     partialTpPrice3 := sd20
 
-        // ── Draw on Liquidity as the final objective (Phase 4) ──
-        // The standard-deviation projection is the leg's own measured target; the
-        // draw is where the resting orders actually are. When the draw lies in the
-        // trade's direction and beyond the SD objective, it takes over the final
-        // target, because that is the level price is being delivered towards.
-        // Phase 5 folds this into the full TP1-3 cascade alongside the named
-        // model; here it only ever extends the last objective, never shortens it.
+        // ── Draw on Liquidity as the final objective ──
+        // The standard-deviation projection is the leg's own measured target;
+        // the draw is where the resting orders actually are. When the draw lies
+        // in the trade's direction and beyond the SD objective, it takes over
+        // the final target, because that is the level price is being delivered
+        // towards.
         if showDOL and not na(dolPx) and dolDir == (isLong ? 1 : -1)
             if isLong and dolPx > partialTpPrice3
                 partialTpPrice3 := dolPx
@@ -2487,36 +2422,18 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
           entryTime=time)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SNIPER ENGINE  (PHASE 5)
+// SNIPER ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
 // Two stages, and the order matters. Stage A is a top-down cascade of hard
 // gates: HTF bias, intermediate array, dealing-range half, killzone, structure
 // state, liquidity taken, SMT, draw on liquidity, and finally a live array being
-// tapped. A setup that fails any armed gate does not score low — it does not
-// score at all, and nothing is drawn.
-//
-// Stage B is the weighted stack, applied only to what survived. It decides how
-// good a valid setup is, never whether it is valid. That separation is the whole
-// point: a confluence score alone will always eventually find eighty points of
-// agreement in a market that is doing the wrong thing.
+// tapped.
 
 // ── Gate 1: an intermediate-timeframe array pointing the same way ────────────
 // A chart-timeframe gap on its own is a local event. The intermediate term
 // agreeing is what makes it part of something larger.
 itfArrayAgree(int dir) =>
-    bool ok = not mtfAnalysis
-    if not ok
-        if dir == 1
-            for f in bullishFVGs
-                if not f.mitigated and f.timeframe != timeframe.period
-                    ok := true
-                    break
-        else
-            for f in bearishFVGs
-                if not f.mitigated and f.timeframe != timeframe.period
-                    ok := true
-                    break
-    ok
+    not mtfAnalysis or not htfIsHigher or (dir == 1 ? itfGapBull : itfGapBear)
 
 // ── Gate 4: structure has actually shifted this way, and recently ────────────
 // Any of the three resolutions counts — CISD is the scout, the swing event is
@@ -2545,10 +2462,6 @@ liquidityTaken(int dir) =>
 // this chart does. The tap has to reach the array's 50% mean — consequent
 // encroachment — not merely graze its far edge, and the candle has to be
 // reacting rather than slicing through.
-//
-// Freshness is read as `touches <= 1` because updateZones() has already counted
-// this bar's own contact by the time the sniper runs: an untouched zone being
-// tapped for the first time reads as one touch, not zero.
 bestTappedArray(int dir) =>
     bool found = false
     float bTop = na
@@ -2569,40 +2482,50 @@ bestTappedArray(int dir) =>
                 bBot := z.bottom
                 bKind := z.kind
                 bFresh := z.touches <= 1
-    if dir == 1
-        for f in bullishFVGs
-            if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
-                continue
-            ce = math.avg(f.top, f.bottom)
-            if low <= ce + tapTol and low >= f.bottom - tapTol and close > open
-                t = f.timeframe != timeframe.period ? 3 : 2
-                if t > bTier
-                    found := true
-                    bTier := t
-                    bTop := f.top
-                    bBot := f.bottom
-                    bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
-                    bFresh := not f.mitigated
-    else
-        for f in bearishFVGs
-            if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
-                continue
-            ce = math.avg(f.top, f.bottom)
-            if high >= ce - tapTol and high <= f.top + tapTol and close < open
-                t = f.timeframe != timeframe.period ? 3 : 2
-                if t > bTier
-                    found := true
-                    bTier := t
-                    bTop := f.top
-                    bBot := f.bottom
-                    bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
-                    bFresh := not f.mitigated
+    // A gap is a tier 3 array at best, so once a zone has produced tier 3 or
+    // better the entire gap scan cannot improve on it and is skipped outright.
+    // Held as a flag rather than an early return so the tuple stays the
+    // function's single unconditional last expression.
+    scanGaps = bTier < 3
+    if scanGaps
+        if dir == 1
+            for f in bullishFVGs
+                if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
+                    continue
+                ce = math.avg(f.top, f.bottom)
+                if low <= ce + tapTol and low >= f.bottom - tapTol and close > open
+                    t = f.timeframe != timeframe.period ? 3 : 2
+                    if t > bTier
+                        found := true
+                        bTier := t
+                        bTop := f.top
+                        bBot := f.bottom
+                        bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
+                        bFresh := not f.mitigated
+                        // Tier 3 is the ceiling for a gap; nothing left to find.
+                        if bTier >= 3
+                            break
+        else
+            for f in bearishFVGs
+                if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
+                    continue
+                ce = math.avg(f.top, f.bottom)
+                if high >= ce - tapTol and high <= f.top + tapTol and close < open
+                    t = f.timeframe != timeframe.period ? 3 : 2
+                    if t > bTier
+                        found := true
+                        bTier := t
+                        bTop := f.top
+                        bBot := f.bottom
+                        bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
+                        bFresh := not f.mitigated
+                        if bTier >= 3
+                            break
     [found, bTop, bBot, bTier, bKind, bFresh]
 
 // ── Stage B: the weighted stack ─────────────────────────────────────────────
 sniperStack(int dir, int tier, bool fresh) =>
     dirStr = dir == 1 ? "Bullish" : "Bearish"
-    safeW = math.max(wArray + wFresh + wOTE + wDisp + wSeq + wVol + wSMT + wTime + wDOLRoom, 1.0)
     // Recomputed from lastDispUpBar rather than read from dispUpRecent, because
     // that value is produced by the engine section further down the file and
     // Pine resolves identifiers in file order.
@@ -2613,37 +2536,83 @@ sniperStack(int dir, int tier, bool fresh) =>
     swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
     mssOK = swingFresh and lastStructEvent == "MSS"
     room = na(dolPx) ? 0.0 : math.abs(dolPx - close) / math.max(volUnit, syminfo.mintick)
+    // A tier-3 order block is a solid array, not 60% of one. The tier / 5 ramp
+    // charged every realistic setup a third of the largest weight in the stack
+    // for the crime of not being a Unicorn.
+    tierPts = tier >= 5 ? 1.0 : tier == 4 ? 0.9 : tier == 3 ? 0.75 : tier == 2 ? 0.5 : 0.25
 
-    pArray = wArray * math.min(1.0, tier / 5.0)
-    pFresh = wFresh * (fresh ? 1.0 : 0.35)
-    pOTE = wOTE * (inOTEBand ? 1.0 : (oteValid and oteDir == dir ? 0.4 : 0.0))
-    pDisp = wDisp * ((dir == 1 ? dispUpFresh : dispDnFresh) ? 1.0 : 0.3)
-    // CISD and the swing event agreeing is the strongest sequence the engine
-    // recognises: the scout fired, and then the confirmation arrived behind it.
-    pSeq = wSeq * ((cisdOK ? 0.5 : 0.0) + (mssOK ? 0.5 : swingFresh ? 0.3 : 0.0))
-    pVol = wVol * scoreVolume()
-    pSMT = wSMT * (not smtAvailable ? 0.5 : smtDir == dirStr ? 1.0 : smtDir == "None" ? 0.5 : 0.0)
-    pTime = wTime * (inMacro ? 1.0 : inSilverBullet ? 0.85 : (inNYAMKZ or inLondonKZ) ? 0.6 : inAnyKZ ? 0.4 : 0.15)
-    pDOL = wDOLRoom * (dolDir == dir ? math.min(1.0, room / math.max(dolMinRoomATR * 2.0, 0.5)) : 0.0)
+    // Numerator and denominator accumulate together so a factor that cannot apply
+    // leaves the scale entirely rather than scoring zero against the setup.
+    // Dividing by the sum of every weight assumed all ten could max out at once,
+    // which nothing ever does — it is why observable scores topped out near fifty
+    // and no threshold worth setting was reachable.
+    float num = wPD * (na(drEq) ? 0.5 : (dir == 1 ? inDiscount : inPremium) ? 1.0 : 0.0)
+    float den = wPD
+    num += wArray * tierPts
+    den += wArray
+    num += wFresh * (fresh ? 1.0 : 0.5)
+    den += wFresh
+    // With the leg pointing the other way the OTE band is meaningless, not failed.
+    if oteValid and oteDir == dir
+        num += wOTE * (inOTEBand ? 1.0 : 0.4)
+        den += wOTE
+    // Displacement is strictly defined and genuinely rare; its absence should not
+    // cost most of the weight.
+    num += wDisp * ((dir == 1 ? dispUpFresh : dispDnFresh) ? 1.0 : 0.45)
+    den += wDisp
+    num += wSeq * ((cisdOK ? 0.5 : 0.0) + (mssOK ? 0.5 : swingFresh ? 0.3 : 0.0))
+    den += wSeq
+    num += wVol * scoreVolume()
+    den += wVol
+    // No correlated partner means nothing can diverge, so SMT leaves the scale.
+    if smtAvailable
+        num += wSMT * (smtDir == dirStr ? 1.0 : smtDir == "None" ? 0.75 : 0.0)
+        den += wSMT
+    num += wTime * (inMacro ? 1.0 : inSilverBullet ? 0.9 : (inNYAMKZ or inLondonKZ) ? 0.75 : inAnyKZ ? 0.6 : 0.3)
+    den += wTime
+    num += wDOLRoom * (dolDir == dir ? math.min(1.0, room / math.max(dolMinRoomATR * 2.0, 0.5)) : 0.0)
+    den += wDOLRoom
 
-    raw = (pArray + pFresh + pOTE + pDisp + pSeq + pVol + pSMT + pTime + pDOL) / safeW * 100.0
-    math.round(math.max(0.0, math.min(100.0, raw)), 0)
+    math.round(math.max(0.0, math.min(100.0, num / math.max(den, 1.0) * 100.0)), 0)
+
 
 // ── Stage A: run the cascade, record every gate, then score what survives ────
 // The gate array is passed in and written by index so the dashboard checklist
-// walks the same structure the engine does and can never drift out of step
-// with it.
+// walks the same structure the engine does and can never drift out of step with
+// it.
 sniperEvaluate(int dir, array<bool> g) =>
     dirStr = dir == 1 ? "Bullish" : "Bearish"
     g0 = not gateHTF or htfBias == dir
     g1 = not gateITF or itfArrayAgree(dir)
     g2 = not gatePD or (not na(drEq) and (dir == 1 ? inDiscount : inPremium))
-    g3 = not gateKZ or inAnyKZ
+    // A daily bar is stamped at its session open, which falls in none of the
+    // killzone windows, so on a daily or higher chart this gate would reject
+    // every bar forever. Killzones are an intraday concept; above that the gate
+    // has nothing to say and stands down.
+    g3 = not gateKZ or not timeframe.isintraday or inAnyKZ
     g4 = not gateStruct or structStateOK(dir)
     g5 = not gateLiq or liquidityTaken(dir)
     g6 = not gateSMT or not smtAvailable or smtDir == "None" or smtDir == dirStr
     g7 = not gateDOL or (dolDir == dir and not na(dolPx) and math.abs(dolPx - close) >= dolMinRoomATR * volUnit)
-    [tapped, aTop, aBot, aTier, aKind, aFresh] = bestTappedArray(dir)
+    // Every gate above is a constant-time test against cached state. The tap
+    // scan is the only one that walks collections, so the cascade short-circuits
+    // here: if anything above has already failed there is no setup to find, and
+    // several hundred iterations per direction per bar are skipped.
+    cascadeOK = g0 and g1 and g2 and g3 and g4 and g5 and g6 and g7
+    bool tapped = false
+    float aTop = na
+    float aBot = na
+    int aTier = 0
+    string aKind = ""
+    bool aFresh = false
+    if cascadeOK
+        [tp, tTop, tBot, tTier, tKind, tFresh] = bestTappedArray(dir)
+        tapped := tp
+        aTop := tTop
+        aBot := tBot
+        aTier := tTier
+        aKind := tKind
+        aFresh := tFresh
     array.set(g, 0, g0)
     array.set(g, 1, g1)
     array.set(g, 2, g2)
@@ -2653,7 +2622,7 @@ sniperEvaluate(int dir, array<bool> g) =>
     array.set(g, 6, g6)
     array.set(g, 7, g7)
     array.set(g, 8, tapped)
-    allPass = g0 and g1 and g2 and g3 and g4 and g5 and g6 and g7 and tapped
+    allPass = cascadeOK and tapped
     score = allPass ? sniperStack(dir, aTier, aFresh) : 0.0
     [allPass, score, aTier, aKind, aFresh, aTop, aBot]
 
@@ -2721,13 +2690,18 @@ sniperStop(int dir, float aTop, float aBot, string model) =>
     if na(ref)
         ref := purgeStopRef(dir)
     edge = dir == 1 ? aBot : aTop
-    // An invalidation point price has already traded past is not one, so it is
-    // discarded in favour of the array edge.
-    if na(ref) or (dir == 1 ? ref >= close : ref <= close)
-        ref := edge
-    else
-        ref := dir == 1 ? math.min(ref, edge) : math.max(ref, edge)
-    dir == 1 ? ref - buf : ref + buf
+    // The array edge is the entry's own invalidation and is always valid: enter
+    // at a demand zone and you are wrong when the zone fails, not when some older
+    // purge wick five ATR below fails. Taking the wider of the two was dragging
+    // the stop out to that wick and killing the reward:risk before it was
+    // measured. The model's swing invalidation is only worth widening to while it
+    // stays inside the risk budget; past that it is a different trade at a
+    // different size.
+    float chosen = edge
+    if not na(ref) and (dir == 1 ? ref < edge and ref < close : ref > edge and ref > close)
+        if math.abs(close - ref) <= maxStopATR * volUnit
+            chosen := ref
+    dir == 1 ? chosen - buf : chosen + buf
 
 // A tracked trade built from explicit prices rather than from an FVG, so the
 // invalidation-based stop and the SD/DOL objectives survive intact. TP1 and TP2
@@ -2760,8 +2734,7 @@ capRiskLevels() =>
         line.delete(r.partialLine3)
 
 // Signals are drawn against the exact zone that triggered them, captured in
-// bullTriggerRef / bearTriggerRef. Previously this re-scanned the array and took
-// the newest match, so the stop could be placed on an unrelated zone.
+// bullTriggerRef / bearTriggerRef.
 drawEntrySignals(bullishIndices, bearishIndices) =>
     sess = getCurrentSession()
     sessShort = inMacro ? "MACRO" : inSilverBullet ? "SB" : sess == "London/NY Overlap" ? "LN/NY" : sess == "NY AM KZ" ? "NYAM" : sess == "London KZ" ? "LDN" : sess == "London Close" ? "LNCL" : sess == "Asia KZ" ? "ASIA" : "OFF"
@@ -2773,9 +2746,9 @@ drawEntrySignals(bullishIndices, bearishIndices) =>
     if array.size(bullishIndices) > 0 and array.includes(bullishIndices, bar_index) and array.size(bullTriggerRef) > 0
         trigFVG = array.get(bullTriggerRef, 0)
         stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        labelText = "▲ BUY " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
+        tipText = stars + "  " + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
         labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.green, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(0, 180, 100), 10) : color.new(color.rgb(100, 160, 80), 20)
-        label.new(bar_index, low - tapTol, labelText, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.normal)
+        label.new(bar_index, low - tapTol, "buy", style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.tiny, tooltip=tipText)
         if riskManagement
             newRiskLevel = createRiskLevel(bar_index, close, true, trigFVG)
             array.push(riskLevels, newRiskLevel)
@@ -2783,377 +2756,100 @@ drawEntrySignals(bullishIndices, bearishIndices) =>
     if array.size(bearishIndices) > 0 and array.includes(bearishIndices, bar_index) and array.size(bearTriggerRef) > 0
         trigFVG = array.get(bearTriggerRef, 0)
         stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        labelText = "▼ SELL " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
+        tipText = stars + "  " + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
         labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.red, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(200, 50, 50), 10) : color.new(color.rgb(180, 80, 80), 20)
-        label.new(bar_index, high + tapTol, labelText, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.normal)
+        label.new(bar_index, high + tapTol, "sell", style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.tiny, tooltip=tipText)
         if riskManagement
             newRiskLevel = createRiskLevel(bar_index, close, false, trigFVG)
             array.push(riskLevels, newRiskLevel)
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+// Five lines. What is left is only what you act on: which way the engine is
+// biased, whether the clock allows a trade at all, which half of the range price
+// is in, where it is being delivered to, and what the signal engine is doing
+// about it.
+
+// When nothing fires, the one thing worth knowing is which gate said no.
+firstBlockedGate(array<bool> g) =>
+    not array.get(g, 0) ? "HTF Bias" : not array.get(g, 1) ? "ITF Array" : not array.get(g, 2) ? "PD Range" : not array.get(g, 3) ? "Killzone" : not array.get(g, 4) ? "Structure" : not array.get(g, 5) ? "Liquidity" : not array.get(g, 6) ? "SMT" : not array.get(g, 7) ? "DOL" : not array.get(g, 8) ? "No tap" : "—"
+
 updateStatusTable() =>
-    if barstate.islast and showStatusTable
-        // ── Gather all stats ──
-        bisiCount = 0
-        sibiCount = 0
-        perfectCount = 0
-        breakawayCount = 0
-        rejectionCount = 0
-        totalScore = 0.0
-        scoredCount = 0
-        highScoreCount = 0
-        
-        for fvg in bullishFVGs
-            if not fvg.mitigated
-                bisiCount += 1
-                totalScore += fvg.confluenceScore
-                scoredCount += 1
-                if fvg.confluenceScore >= 70
-                    highScoreCount += 1
-                if fvg.fvgVariant == "Perfect"
-                    perfectCount += 1
-                else if fvg.fvgVariant == "Breakaway"
-                    breakawayCount += 1
-                else if fvg.fvgVariant == "Rejection"
-                    rejectionCount += 1
-        
-        for fvg in bearishFVGs
-            if not fvg.mitigated
-                sibiCount += 1
-                totalScore += fvg.confluenceScore
-                scoredCount += 1
-                if fvg.confluenceScore >= 70
-                    highScoreCount += 1
-                if fvg.fvgVariant == "Perfect"
-                    perfectCount += 1
-                else if fvg.fvgVariant == "Breakaway"
-                    breakawayCount += 1
-                else if fvg.fvgVariant == "Rejection"
-                    rejectionCount += 1
-        
-        avgScore = scoredCount > 0 ? totalScore / scoredCount : 0.0
-        
-        activeRiskLevels = 0
-        if array.size(riskLevels) > 0
-            for i = 0 to array.size(riskLevels) - 1
-                if array.get(riskLevels, i).active
-                    activeRiskLevels += 1
-        
-        // ── Phase 2 engine state ──
-        obCount = 0
-        breakerCount = 0
-        mitigationCount = 0
-        freshCount = 0
-        // ── Phase 3 PD arrays ──
-        ifvgCount = 0
-        bprCount = 0
-        unicornCount = 0
-        propCount = 0
-        rejCount = 0
-        refCount = 0
-        // The strongest live array, and how far price is from it — the headline
-        // the Phase 5 stack score will build its PD-array weighting on.
-        bestTier = 0
-        bestKind = ""
-        bestDir = 0
-        bestDist = 0.0
-        for z in zones
-            if z.active
-                if z.kind == "Breaker"
-                    breakerCount += 1
-                else if z.kind == "Mitigation"
-                    mitigationCount += 1
-                else if z.kind == "IFVG"
-                    ifvgCount += 1
-                else if z.kind == "BPR"
-                    bprCount += 1
-                else if z.kind == "Unicorn"
-                    unicornCount += 1
-                else if z.kind == "Propulsion"
-                    propCount += 1
-                else if z.kind == "Rejection"
-                    rejCount += 1
-                else if z.kind == "VI" or z.kind == "NDOG" or z.kind == "NWOG"
-                    refCount += 1
-                else
-                    obCount += 1
-                if z.touches == 0
-                    freshCount += 1
-                t = zoneTier(z)
-                if t > bestTier
-                    bestTier := t
-                    bestKind := z.kind
-                    bestDir := z.dir
-                    bestDist := math.abs(close - z.mean)
-
-        livePurges = 0
-        for s in liqSweeps
-            if not s.invalidated
-                livePurges += 1
-        restingLevels = array.size(liqLevels)
-
-        activeQM = 0
-        for q in qmPatterns
-            if q.active
-                activeQM += 1
-
-        sessionName = getCurrentSession()
-        windowName = getActiveWindow()
-        
-        // ── Theme Colors ──
-        headerBG   = color.new(color.rgb(20, 20, 35), 0)
-        labelBG    = color.new(color.rgb(35, 35, 55), 5)
-        valueBG    = color.new(color.rgb(28, 28, 45), 5)
-        accentGreen  = color.new(color.rgb(0, 200, 120), 15)
-        accentRed    = color.new(color.rgb(220, 50, 50), 15)
-        accentBlue   = color.new(color.rgb(60, 130, 255), 15)
-        accentGold   = color.new(color.rgb(255, 200, 40), 10)
-        accentPurple = color.new(color.rgb(160, 100, 255), 15)
-        dimText    = color.rgb(160, 160, 180)
+    if uiRedraw and showStatusTable
+        headerBG = color.new(color.rgb(20, 20, 35), 0)
+        labelBG = color.new(color.rgb(35, 35, 55), 5)
+        accentGreen = color.new(color.rgb(0, 200, 120), 15)
+        accentRed = color.new(color.rgb(220, 50, 50), 15)
+        accentGold = color.new(color.rgb(255, 200, 40), 10)
+        dimText = color.rgb(160, 160, 180)
         brightText = color.white
-        
-        var table dash = table.new(position.top_right, 2, 27, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
-        
-        // ── Row 0: Header ──
-        tickerName = syminfo.ticker
-        trendIcon = marketStructure == "Uptrend" ? " ▲" : marketStructure == "Downtrend" ? " ▼" : " ◆"
-        trendColor = marketStructure == "Uptrend" ? accentGreen : marketStructure == "Downtrend" ? accentRed : color.new(color.gray, 30)
-        table.cell(dash, 0, 0, tickerName, text_color=accentGold, bgcolor=headerBG, text_size=size.normal, text_halign=text.align_left)
-        table.cell(dash, 1, 0, marketStructure + trendIcon, text_color=brightText, bgcolor=trendColor, text_size=size.normal, text_halign=text.align_center)
-        
-        // ── Row 1: Session ──
-        sessColor = inMacro ? accentGold : inSilverBullet ? color.new(color.rgb(200, 200, 220), 15) : sessionName == "NY AM KZ" ? color.new(color.orange, 15) : sessionName == "London KZ" ? accentBlue : sessionName == "London Close" ? accentPurple : sessionName == "Asia KZ" ? color.new(color.rgb(128, 0, 128), 25) : color.new(color.gray, 40)
+
+        var table dash = table.new(position.top_right, 2, 5, bgcolor=headerBG, border_width=0, frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+
+        // ── Bias: chart structure, and the higher timeframe standing behind it ──
+        biasTxt = marketStructure + (htfBias == 1 ? "  ·  HTF ▲" : htfBias == -1 ? "  ·  HTF ▼" : "  ·  HTF —")
+        biasBG = marketStructure == "Uptrend" ? accentGreen : marketStructure == "Downtrend" ? accentRed : color.new(color.gray, 30)
+        table.cell(dash, 0, 0, syminfo.ticker, text_color=accentGold, bgcolor=headerBG, text_size=size.normal, text_halign=text.align_left)
+        table.cell(dash, 1, 0, biasTxt, text_color=brightText, bgcolor=biasBG, text_size=size.normal, text_halign=text.align_center)
+
+        // ── The clock ──
+        kzBG = inMacro ? accentGold : inSilverBullet ? color.new(color.rgb(200, 200, 220), 15) : inAnyKZ ? color.new(color.orange, 20) : color.new(color.gray, 45)
         table.cell(dash, 0, 1, "Killzone", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 1, windowName, text_color=inMacro ? color.black : brightText, bgcolor=sessColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 2: Confluence Score ──
-        scoreIcon = avgScore >= 70 ? "★★★" : avgScore >= 45 ? "★★" : "★"
-        avgScoreColor = avgScore >= 70 ? accentGreen : avgScore >= 45 ? color.new(color.orange, 15) : accentRed
-        table.cell(dash, 0, 2, "Confluence", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 2, scoreIcon + " " + str.tostring(avgScore, "#.#") + " avg | " + str.tostring(highScoreCount) + " A-tier", text_color=brightText, bgcolor=avgScoreColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 3: FVG Count ──
-        totalFVG = bisiCount + sibiCount
-        table.cell(dash, 0, 3, "FVGs", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 3, "▲" + str.tostring(bisiCount) + " ▼" + str.tostring(sibiCount) + " = " + str.tostring(totalFVG), text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 4: FVG Variants ──
-        table.cell(dash, 0, 4, "Variants", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 4, "P:" + str.tostring(perfectCount) + " B:" + str.tostring(breakawayCount) + " R:" + str.tostring(rejectionCount), text_color=dimText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 5: Zone map (OB / Breaker / Mitigation) ──
-        table.cell(dash, 0, 5, "Zones", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 5, "OB:" + str.tostring(obCount) + " BRK:" + str.tostring(breakerCount) + " MIT:" + str.tostring(mitigationCount), text_color=color.rgb(0, 200, 180), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 6: Zone freshness ──
-        freshColor = freshCount > 0 ? accentGreen : color.new(color.gray, 45)
-        table.cell(dash, 0, 6, "Fresh Zones", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 6, str.tostring(freshCount) + " untouched ✦", text_color=brightText, bgcolor=freshColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 7: CISD ──
-        cisdAge = na(lastCISDBar) ? "" : " (" + str.tostring(bar_index - lastCISDBar) + "b)"
-        cisdColor = lastCISDDir == "Bullish" ? color.new(cisdBullColor, 25) : lastCISDDir == "Bearish" ? color.new(cisdBearColor, 25) : color.new(color.gray, 50)
-        cisdText = lastCISDDir == "None" ? "Awaiting" : lastCISDDir + (lastCISDDisplaced ? " ✦" : "") + cisdAge
-        table.cell(dash, 0, 7, "CISD", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 7, cisdText, text_color=color.black, bgcolor=cisdColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 8: Liquidity purges + resting levels ──
-        purgeAge = na(lastPurgeBar) ? "" : " (" + str.tostring(bar_index - lastPurgeBar) + "b)"
-        purgeRef = na(lastPurgeExtreme) ? "" : " @ " + str.tostring(lastPurgeExtreme, format.mintick)
-        purgeText = lastPurgeDir == "None" ? str.tostring(restingLevels) + " levels resting" : lastPurgeDir + purgeAge + purgeRef + " | " + str.tostring(livePurges) + " live"
-        table.cell(dash, 0, 8, "Liq Purge", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 8, purgeText, text_color=color.rgb(255, 235, 80), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 9: Quasimodo ──
-        qmAge = na(lastQMBar) ? "" : " (" + str.tostring(bar_index - lastQMBar) + "b)"
-        qmColor = activeQM == 0 ? color.new(color.gray, 50) : lastQMDir == "Bullish" ? color.new(qmBullColor, 25) : color.new(qmBearColor, 25)
-        qmText = lastQMDir == "None" ? "None" : lastQMDir + qmAge + " | " + str.tostring(activeQM) + " live"
-        table.cell(dash, 0, 9, "Quasimodo", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 9, qmText, text_color=color.black, bgcolor=qmColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 10: RSI ──
-        rsiColor = rsiValue > 70 ? accentRed : rsiValue < 30 ? accentGreen : valueBG
-        table.cell(dash, 0, 10, "RSI (14)", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 10, str.tostring(rsiValue, "#.#"), text_color=brightText, bgcolor=rsiColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 11: ATR / Volatility ──
-        volRatio = na(atrRefSMA) or atrRefSMA == 0 ? 0.0 : atrRef / atrRefSMA
-        volLabel = volRatio >= 1.5 ? "🔥 High" : volRatio >= 0.8 ? "Normal" : "Low"
-        atrDisplay = na(atrRef) ? "N/A" : str.tostring(atrRef, format.mintick) + " (" + volLabel + ")"
-        table.cell(dash, 0, 11, "ATR", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 11, atrDisplay, text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 12: Structure Event ──
-        structAge = na(lastStructBar) ? "" : " (" + str.tostring(bar_index - lastStructBar) + "b)"
-        structColor = lastStructEvent == "MSS" ? color.new(mssColor, 20) : lastStructEvent == "CHoCH" ? color.new(chochColor, 20) : lastStructEvent == "BOS" ? color.new(bosColor, 20) : color.new(color.gray, 50)
-        structText = lastStructEvent == "None" ? "Awaiting" : lastStructEvent + " " + lastStructDir + structAge
-        table.cell(dash, 0, 12, "Structure", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 12, structText, text_color=brightText, bgcolor=structColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 13: Dealing Range position ──
-        pdText = na(drEq) ? "No range yet" : inPremium ? "PREMIUM (sell zone)" : "DISCOUNT (buy zone)"
-        pdColor = na(drEq) ? color.new(color.gray, 50) : inPremium ? accentRed : accentGreen
-        table.cell(dash, 0, 13, "Range", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 13, pdText, text_color=brightText, bgcolor=pdColor, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 14: Risk Management ──
-        slMode = useSmartATR ? "Smart ATR" : "Fixed"
-        table.cell(dash, 0, 14, "SL/TP Mode", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 14, slMode + " | " + str.tostring(activeRiskLevels) + "/" + str.tostring(maxConcurrentPositions) + " pos", text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-        
-        // ── Row 15: Signal Status ──
-        // The sniper engine owns this row; the legacy FVG tap only reaches it
-        // when the user has switched that path back on.
-        signalText = nonRepaintMode ? "No Signal (confirmed)" : "No Signal"
-        signalBG = color.new(color.gray, 50)
-        if not na(lastSniperBar) and lastSniperBar == bar_index
-            signalText := (sniperDir == 1 ? "▲ SNIPER BUY " : "▼ SNIPER SELL ") + str.tostring(sniperScore, "#")
-            signalBG := sniperDir == 1 ? accentGreen : accentRed
-        if array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index)
-            signalText := "▲ BUY ACTIVE"
-            signalBG := accentGreen
-        if array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index)
-            signalText := "▼ SELL ACTIVE"
-            signalBG := accentRed
-        table.cell(dash, 0, 15, "Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 15, signalText, text_color=brightText, bgcolor=signalBG, text_size=size.small, text_halign=text.align_center)
+        table.cell(dash, 1, 1, getActiveWindow(), text_color=inMacro ? color.black : brightText, bgcolor=kzBG, text_size=size.small, text_halign=text.align_center)
 
-        // ── Row 16: Phase 3 PD array census ──
-        // Named arrText/arrColor, not pdText/pdColor: row 13's premium-discount
-        // cell already owns those two names in this scope.
-        arrText = "IFVG:" + str.tostring(ifvgCount) + " BPR:" + str.tostring(bprCount) + " UNI:" + str.tostring(unicornCount)
-        arrColor = unicornCount > 0 ? color.new(unicornBullColor, 20) : bprCount > 0 ? color.new(bprBullColor, 25) : valueBG
-        table.cell(dash, 0, 16, "PD Arrays", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 16, arrText, text_color=brightText, bgcolor=arrColor, text_size=size.small, text_halign=text.align_center)
+        // ── Which half of the dealing range: never buy premium, never sell discount ──
+        pdTxt = na(drEq) ? "No range yet" : inPremium ? "PREMIUM — sell side" : "DISCOUNT — buy side"
+        pdBG = na(drEq) ? color.new(color.gray, 50) : inPremium ? accentRed : accentGreen
+        table.cell(dash, 0, 2, "Range", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 2, pdTxt, text_color=brightText, bgcolor=pdBG, text_size=size.small, text_halign=text.align_center)
 
-        // ── Row 17: the strongest array currently live, and its distance ──
-        bestText = bestTier == 0 ? "None live" : bestKind + " " + (bestDir == 1 ? "▲" : "▼") + " " + tierStars(bestTier) + " @" + str.tostring(bestDist / math.max(volUnit, syminfo.mintick), "#.#") + " ATR"
-        bestColor = bestTier >= 5 ? color.new(unicornBullColor, 15) : bestTier == 4 ? accentGreen : bestTier == 3 ? accentBlue : color.new(color.gray, 45)
-        table.cell(dash, 0, 17, "Best Array", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 17, bestText, text_color=brightText, bgcolor=bestColor, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 18: OTE band and the measured -1 SD objective ──
-        oteText = not oteValid ? "Leg too small" : (oteDir == 1 ? "▲ " : "▼ ") + str.tostring(ote705, format.mintick) + " | -1SD " + str.tostring(sd10, format.mintick)
-        inOTE = oteValid and close <= math.max(ote62, ote79) and close >= math.min(ote62, ote79)
-        oteColor = not oteValid ? color.new(color.gray, 50) : inOTE ? color.new(oteLineColor, 20) : valueBG
-        table.cell(dash, 0, 18, "OTE / SD", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 18, oteText + (inOTE ? " ◆IN" : ""), text_color=inOTE ? color.black : brightText, bgcolor=oteColor, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 19: Draw on Liquidity — the headline of the whole phase ──
-        // Where price is being delivered to, how far that is in ATR, and how
-        // confident the ranking is relative to the pool on the opposite side.
+        // ── Where price is being delivered to ──
         dolDist = na(dolPx) ? 0.0 : math.abs(dolPx - close) / math.max(volUnit, syminfo.mintick)
-        dolEdge = dolScore - math.max(dolAboveScore == dolScore ? dolBelowScore : dolAboveScore, 0.0)
-        dolText = na(dolPx) ? "No qualifying pool" : (dolDir == 1 ? "▲ " : "▼ ") + dolName + " " + str.tostring(dolPx, format.mintick) + " | " + str.tostring(dolDist, "#.#") + " ATR"
-        dolColor = na(dolPx) ? color.new(color.gray, 50) : dolDir == 1 ? color.new(dolUpColor, 20) : color.new(dolDnColor, 20)
-        table.cell(dash, 0, 19, "Draw on Liq", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 19, dolText, text_color=na(dolPx) ? brightText : color.black, bgcolor=dolColor, text_size=size.small, text_halign=text.align_center)
+        dolTxt = na(dolPx) ? "No qualifying pool" : (dolDir == 1 ? "▲ " : "▼ ") + dolName + " " + str.tostring(dolPx, format.mintick) + "  ·  " + str.tostring(dolDist, "#.#") + " ATR"
+        dolBG = na(dolPx) ? color.new(color.gray, 50) : dolDir == 1 ? color.new(dolUpColor, 20) : color.new(dolDnColor, 20)
+        table.cell(dash, 0, 3, "Draw on Liq", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 3, dolTxt, text_color=na(dolPx) ? brightText : color.black, bgcolor=dolBG, text_size=size.small, text_halign=text.align_center)
 
-        // ── Row 20: the runner-up pool, so the counter-objective is visible ──
-        altText = na(dolPx) ? "—" : (dolDir == 1 ? "▼ " + (dolBelowName == "" ? "none" : dolBelowName + " " + str.tostring(dolBelowPx, format.mintick)) : "▲ " + (dolAboveName == "" ? "none" : dolAboveName + " " + str.tostring(dolAbovePx, format.mintick))) + "  (edge " + str.tostring(dolEdge, "#") + ")"
-        table.cell(dash, 0, 20, "Counter Pool", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 20, altText, text_color=dimText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 21: Power of 3 and the True Day Open bias ──
-        po3Icon = po3Phase == "Distribution" ? "③" : po3Phase == "Manipulation" ? "②" : "①"
-        po3Text = po3Icon + " " + po3Phase + (po3Dir == 0 ? "" : po3Dir == 1 ? " ▲" : " ▼") + (na(po3ManipLevel) ? "" : " @" + str.tostring(po3ManipLevel, format.mintick)) + (na(trueDayOpen) ? "" : " | TDO " + (tdoBiasUp ? "▲" : "▼"))
-        po3Color = po3Phase == "Distribution" ? (po3Dir == 1 ? accentGreen : accentRed) : po3Phase == "Manipulation" ? accentGold : color.new(color.gray, 40)
-        table.cell(dash, 0, 21, "Power of 3", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 21, po3Text, text_color=po3Phase == "Manipulation" ? color.black : brightText, bgcolor=po3Color, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 22: SMT against the correlated instrument ──
-        smtAge = na(smtBar) ? "" : " (" + str.tostring(bar_index - smtBar) + "b)"
-        smtText = not smtAvailable ? "Unavailable" : smtDir == "None" ? "Aligned — no divergence" : smtDir + smtAge + " · " + smtNote
-        smtColor = not smtAvailable ? color.new(color.gray, 55) : smtDir == "Bullish" ? color.new(smtBullColor, 25) : smtDir == "Bearish" ? color.new(smtBearColor, 25) : color.new(valueBG, 5)
-        table.cell(dash, 0, 22, "SMT", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 22, smtText, text_color=(smtDir == "None" or not smtAvailable) ? brightText : color.black, bgcolor=smtColor, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 23: previous-period levels ──
-        htfText = (na(pdhRaw) ? "PDH —" : "PDH " + str.tostring(pdhRaw, format.mintick)) + " / " + (na(pdlRaw) ? "—" : str.tostring(pdlRaw, format.mintick))
-        table.cell(dash, 0, 23, "PD Levels", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 23, htfText, text_color=color.rgb(255, 190, 90), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 24: Asian range, Judas and Turtle Soup in one narrative line ──
-        asiaTxt = na(asiaHigh) or na(asiaLow) ? "Asia —" : "Asia " + str.tostring(asiaHigh - asiaLow, format.mintick)
-        judasTxt = judasDir == "None" ? "" : " | Judas " + (judasDir == "Bullish" ? "▲" : "▼")
-        tsTxt = lastTSDir == "None" or na(lastTSBar) ? "" : " | TS " + (lastTSDir == "Bullish" ? "▲" : "▼") + str.tostring(bar_index - lastTSBar) + "b"
-        narrColor = judasDir != "None" ? color.new(judasColor, 30) : lastTSDir != "None" ? color.new(tsColor, 35) : valueBG
-        table.cell(dash, 0, 24, "Asia / Named", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 24, asiaTxt + judasTxt + tsTxt, text_color=brightText, bgcolor=narrColor, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 25: the last thing the sniper engine actually fired ──
-        snipAge = na(lastSniperBar) ? "" : " (" + str.tostring(bar_index - lastSniperBar) + "b)"
-        snipText = na(lastSniperBar) ? "No signal yet" : (sniperDir == 1 ? "▲ " : "▼ ") + sniperModel + " " + str.tostring(sniperScore, "#") + " · " + str.tostring(sniperRR, "#.#") + "R" + snipAge
-        snipColor = na(lastSniperBar) ? color.new(color.gray, 50) : sniperDir == 1 ? color.new(sniperBullColor, 20) : color.new(sniperBearColor, 20)
-        table.cell(dash, 0, 25, "Last Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 25, snipText, text_color=na(lastSniperBar) ? brightText : color.black, bgcolor=snipColor, text_size=size.small, text_halign=text.align_center)
-
-        // ── Row 26: what the engine is waiting on right now ──
-        // Every gate passed on this side, the stack score simply has not cleared
-        // the threshold yet. The gate checklist panel shows which gate is the
-        // holdout when nothing reaches even this far.
-        watchText = watchModelL != "" ? "▲ " + watchModelL + " " + str.tostring(watchScoreL, "#") + "/" + str.tostring(aPlusThreshold, "#") : watchModelS != "" ? "▼ " + watchModelS + " " + str.tostring(watchScoreS, "#") + "/" + str.tostring(aPlusThreshold, "#") : "Gates not aligned"
-        watchColor2 = (watchModelL != "" or watchModelS != "") ? accentGold : color.new(color.gray, 50)
-        table.cell(dash, 0, 26, "On Watch", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 26, watchText, text_color=(watchModelL != "" or watchModelS != "") ? color.black : brightText, bgcolor=watchColor2, text_size=size.small, text_halign=text.align_center)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GATE CHECKLIST  (PHASE 5)
-// ═══════════════════════════════════════════════════════════════════════════
-// The panel that answers "why is nothing firing?". Every hard gate is listed in
-// cascade order with its live state for both directions: ✓ passing, ✗ blocking,
-// – disarmed in the settings. Read top to bottom it is the same reasoning the
-// engine just did, which means a quiet chart is explainable rather than broken.
-gateRow(table t, int row, string nm, int gi, bool armed) =>
-    okLong = array.get(gateL, gi)
-    okShort = array.get(gateS, gi)
-    passBG = color.new(color.rgb(0, 170, 90), 25)
-    failBG = color.new(color.rgb(180, 40, 40), 35)
-    offBG = color.new(color.gray, 60)
-    table.cell(t, 0, row, nm, text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
-    table.cell(t, 1, row, not armed ? "–" : okLong ? "✓" : "✗", text_color=color.white, bgcolor=not armed ? offBG : okLong ? passBG : failBG, text_size=size.tiny, text_halign=text.align_center)
-    table.cell(t, 2, row, not armed ? "–" : okShort ? "✓" : "✗", text_color=color.white, bgcolor=not armed ? offBG : okShort ? passBG : failBG, text_size=size.tiny, text_halign=text.align_center)
-
-updateGateTable() =>
-    if barstate.islast and showGateTable and enableSniper
-        var table gt = table.new(position.bottom_right, 3, 12, bgcolor=color.new(color.rgb(20, 20, 35), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
-        table.cell(gt, 0, 0, "SNIPER GATES", text_color=color.rgb(255, 200, 40), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_left)
-        table.cell(gt, 1, 0, "▲", text_color=color.rgb(0, 220, 130), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_center)
-        table.cell(gt, 2, 0, "▼", text_color=color.rgb(255, 80, 110), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_center)
-        gateRow(gt, 1, "HTF Bias", 0, gateHTF)
-        gateRow(gt, 2, "ITF Array", 1, gateITF)
-        gateRow(gt, 3, "PD Range", 2, gatePD)
-        gateRow(gt, 4, "Killzone", 3, gateKZ)
-        gateRow(gt, 5, "Structure", 4, gateStruct)
-        gateRow(gt, 6, "Liquidity", 5, gateLiq)
-        gateRow(gt, 7, "SMT", 6, gateSMT)
-        gateRow(gt, 8, "DOL", 7, gateDOL)
-        // The tap is the entry trigger, never disarmable: with nothing being
-        // touched there is no setup to evaluate at all.
-        gateRow(gt, 9, "Array Tap", 8, true)
-        scoreBG = color.new(color.rgb(28, 28, 45), 5)
-        table.cell(gt, 0, 10, "Stack Score", text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
-        table.cell(gt, 1, 10, str.tostring(liveScoreL, "#"), text_color=liveScoreL >= aPlusThreshold ? color.black : color.white, bgcolor=liveScoreL >= aPlusThreshold ? color.new(color.rgb(0, 220, 130), 20) : scoreBG, text_size=size.tiny, text_halign=text.align_center)
-        table.cell(gt, 2, 10, str.tostring(liveScoreS, "#"), text_color=liveScoreS >= aPlusThreshold ? color.black : color.white, bgcolor=liveScoreS >= aPlusThreshold ? color.new(color.rgb(255, 80, 110), 20) : scoreBG, text_size=size.tiny, text_halign=text.align_center)
-        // Per side, so the row stays inside the three-column layout. The model
-        // that is on watch is named on the main dashboard's "On Watch" row.
-        watchBG = color.new(color.rgb(255, 200, 40), 30)
-        idleBG = color.new(color.gray, 55)
+        // ── The engine's verdict, in priority order: fired now, on watch, or
+        // the gate that is holding it up — with the age of the last real signal
+        // so a quiet chart still tells you when it last spoke.
         firedNow = not na(lastSniperBar) and lastSniperBar == bar_index
-        table.cell(gt, 0, 11, "Verdict", text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
-        table.cell(gt, 1, 11, firedNow and sniperDir == 1 ? "FIRED" : watchModelL != "" ? "WATCH" : "—", text_color=color.black, bgcolor=firedNow and sniperDir == 1 ? color.new(sniperBullColor, 15) : watchModelL != "" ? watchBG : idleBG, text_size=size.tiny, text_halign=text.align_center)
-        table.cell(gt, 2, 11, firedNow and sniperDir == -1 ? "FIRED" : watchModelS != "" ? "WATCH" : "—", text_color=color.black, bgcolor=firedNow and sniperDir == -1 ? color.new(sniperBearColor, 15) : watchModelS != "" ? watchBG : idleBG, text_size=size.tiny, text_halign=text.align_center)
+        lastTag = na(lastSniperBar) ? "" : "  ·  last " + (sniperDir == 1 ? "▲" : "▼") + str.tostring(bar_index - lastSniperBar) + "b"
+        // How often this has ever worked, so a quiet chart can be told apart
+        // from a broken one without a second panel.
+        // The ceiling actually reached, next to the bar it has to clear: with
+        // these two numbers side by side the threshold sets itself.
+        tally = "  ·  " + str.tostring(signalCount) + " fired / " + str.tostring(cascadePassBars) + " setups · best " + str.tostring(bestScoreSeen, "#") + " vs " + str.tostring(aPlusThreshold, "#")
+        string sigTxt = ""
+        color sigBG = color.new(color.gray, 50)
+        color sigFG = brightText
+        if not enableSniper
+            sigTxt := "Sniper engine off"
+        else if firedNow
+            sigTxt := (sniperDir == 1 ? "▲ BUY  " : "▼ SELL  ") + sniperModel + "  " + str.tostring(sniperScore, "#") + "  ·  " + str.tostring(sniperRR, "#.#") + "R"
+            sigBG := sniperDir == 1 ? accentGreen : accentRed
+        else if watchModelL != ""
+            sigTxt := "▲ watch " + watchModelL + "  " + str.tostring(watchScoreL, "#") + "/" + str.tostring(aPlusThreshold, "#") + tally
+            sigBG := accentGold
+            sigFG := color.black
+        else if watchModelS != ""
+            sigTxt := "▼ watch " + watchModelS + "  " + str.tostring(watchScoreS, "#") + "/" + str.tostring(aPlusThreshold, "#") + tally
+            sigBG := accentGold
+            sigFG := color.black
+        else
+            bL = firstBlockedGate(gateL)
+            bS = firstBlockedGate(gateS)
+            sigTxt := "blocked: " + (bL == bS ? bL : "▲" + bL + "  ▼" + bS) + lastTag + tally
+        table.cell(dash, 0, 4, "Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 4, sigTxt, text_color=sigFG, bgcolor=sigBG, text_size=size.small, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELIVERY RUN TRACKER
 // ═══════════════════════════════════════════════════════════════════════════
 // A delivery run is a series of consecutive same-direction closes — one leg of
 // algorithmic delivery. The opening price of the run's first candle is the level
-// that, once closed through, marks a change in the state of delivery. It is also
-// where every order block's origin candle sits, so both the CISD engine and the
-// zone engine read from here.
-//
-// Dojis extend the current run rather than sealing it: a candle with no body has
-// not delivered anything, so it cannot end a delivery leg.
+// that, once closed through, marks a change in the state of delivery.
 runIsUp = close > open
 runIsDn = close < open
 
@@ -3180,16 +2876,13 @@ if canDetect
         dnRunLen += runIsDn ? 1 : 0
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ICT MARKET STRUCTURE ENGINE — BOS / CHoCH / MSS
+// MARKET STRUCTURE — BOS / CHoCH / MSS
 // ═══════════════════════════════════════════════════════════════════════════
-// Replaces the old SMA-cross plus "count of higher highs in the last 10 bars"
-// heuristic, which had no notion of a break of structure. Pivots come from
-// ta.pivothigh / ta.pivotlow, which confirm only after `len` bars have closed on
-// both sides — inherently non-repainting.
-//
+// Pivots come from ta.pivothigh / ta.pivotlow, which confirm only after `len`
+// bars have closed on both sides — inherently non-repainting.
 //   BOS   — close beyond the prior swing extreme in the direction of the trend
 //   CHoCH — first close beyond the opposing extreme, flipping the trend
-//   MSS   — a CHoCH backed by displacement (the high-quality reversal trigger)
+//   MSS   — a CHoCH backed by displacement, the high-quality reversal trigger
 
 // ── Displacement: an energetic candle that leaves an imbalance behind it ──
 dispBodyUp = close[1] - open[1]
@@ -3239,12 +2932,6 @@ pushPivot(int idx, float price, bool isHigh) =>
 // Every confirmed pivot is also resting liquidity, so it enters the purge
 // registry at the same time. A pivot cannot already be breached at this point:
 // ta.pivothigh only confirms once `swingLen` bars have closed below it.
-//
-// Gated on canDetect because the confirming bar is the forming bar: intrabar,
-// ta.pivothigh can report a pivot that the still-rising high then invalidates.
-// Ungated, that would push a phantom liquidity level and permanently corrupt the
-// high/low alternation the Quasimodo matcher depends on. Nothing is lost by
-// waiting — the pivot is registered at the close of the very same bar.
 if canDetect and not na(swingPH)
     swingHighPrice := swingPH
     swingHighBar := bar_index - swingLen
@@ -3362,6 +3049,21 @@ marketStructure := swingTrend == 1 ? "Uptrend" : swingTrend == -1 ? "Downtrend" 
 if canDetect
     updateLiquidityLevels()
     cleanPurges()
+    // One pass over the registry answers every purge question asked this bar.
+    livePurgeUpBar := na
+    livePurgeUpWick := na
+    livePurgeDnBar := na
+    livePurgeDnWick := na
+    for s in liqSweeps
+        if not s.invalidated
+            if s.dir == 1
+                if na(livePurgeUpBar) or s.confirmBar > livePurgeUpBar
+                    livePurgeUpBar := s.confirmBar
+                    livePurgeUpWick := s.wickExtreme
+            else
+                if na(livePurgeDnBar) or s.confirmBar > livePurgeDnBar
+                    livePurgeDnBar := s.confirmBar
+                    livePurgeDnWick := s.wickExtreme
 
 // A purge confirmed on this very bar. lastPurgeExtreme carries the wick that
 // made it, which is the invalidation point every reversal model stops behind.
@@ -3395,8 +3097,7 @@ cisdPurgeDn = purgedRecently(-1, cisdExtremeLookback)
 
 // The effective extreme includes the reversing candle's own wick. Without it a
 // breaking candle that undercut the run low before closing back up — the single
-// most common reversal shape there is — would fail the window test. This is also
-// the true invalidation point, so it is what the event stores.
+// most common reversal shape there is — would fail the window test.
 cisdLowRef = math.min(nz(dnRunLow, low), low)
 cisdHighRef = math.max(nz(upRunHigh, high), high)
 
@@ -3452,10 +3153,6 @@ else if zoneOnInternalBreaks and intBearBreak and zoneOriginDn > 0
 // overlap: price crossed the area on a wick but never opened or closed inside
 // it. It is the smallest array in the methodology, which is why it is off by
 // default — price returns to them constantly and they would bury the chart.
-//
-// Both of these run after the zone pass, so updateZones() has already advanced
-// this bar and the fresh zones (confirmBar == bar_index) are left alone until
-// the next one.
 viGapUp = open - close[1]
 viGapDn = close[1] - open
 viMin = viMinATR * volUnit
@@ -3468,8 +3165,7 @@ if canDetect and showVI and bar_index > 1
 // NDOG / NWOG — the gap between the prior session's close and the new session's
 // open. timeframe.change() fires on the exchange's own session boundary, which
 // on FX and futures is the 17:00 New York roll the NDOG is defined against, so
-// there is no hand-rolled UTC hour here and the feed handles DST. Both are
-// reference levels: updateZones() never retires them for being traded through.
+// there is no hand-rolled UTC hour here and the feed handles DST.
 newDayBar = timeframe.change("D")
 newWeekBar = timeframe.change("W")
 ogMin = math.max(ogMinATR * volUnit, syminfo.mintick)
@@ -3488,10 +3184,8 @@ if canDetect and showOG and timeframe.isintraday and bar_index > 1
 // ═══════════════════════════════════════════════════════════════════════════
 // Bearish: Left Shoulder high -> Leg low -> Head high sweeping beyond the
 // shoulder -> close through the Leg. The entry is the retrace back to the
-// shoulder price (the QML), the stop sits beyond the Head and the first
-// objective is the broken Leg. Structurally this is the same sequence the purge
-// and MSS engines already produce, which is why it is a named pattern here
-// rather than a module of its own.
+// shoulder (the QML), the stop sits beyond the Head, the first objective is the
+// broken Leg.
 qmCount = array.size(swingPoints)
 if canDetect and qmCount >= 3
     qmLS = array.get(swingPoints, qmCount - 3)
@@ -3547,12 +3241,8 @@ inDiscount := not na(drEq) and close < drEq
 // ═══════════════════════════════════════════════════════════════════════════
 // The impulse leg runs from the older of the two live swing anchors to the
 // newer, and it is measured off the dealing range's own edges so the extreme
-// keeps extending while price is still delivering into it.
-//
-// Retracements at 0.62 / 0.705 / 0.79 back from the extreme are the Optimal
-// Trade Entry band. The same leg measured *forward* past the extreme at 0.5, 1
-// and 2 standard deviations gives objectives the market defined itself, and
-// those are what createRiskLevel() now uses for TP2 and TP3.
+// keeps extending while price is still delivering into it. Retracements at 0.62
+// / 0.705 / 0.79 back from the extreme are the Optimal Trade Entry band.
 legIsUp = nz(swingHighBar, -1) >= nz(swingLowBar, -1)
 oteValid := not na(drHigh) and not na(drLow) and (drHigh - drLow) >= oteMinLegATR * volUnit
 oteDir := legIsUp ? 1 : -1
@@ -3566,7 +3256,7 @@ sd05 := oteValid ? oteExtreme + legRange * 0.5 : na
 sd10 := oteValid ? oteExtreme + legRange * 1.0 : na
 sd20 := oteValid ? oteExtreme + legRange * 2.0 : na
 
-if barstate.islast
+if uiRedraw
     clearBoxes(drBoxRefs)
     clearLines(drLineRefs)
     clearLabels(drLabelRefs)
@@ -3581,12 +3271,11 @@ if barstate.islast
         array.push(drLabelRefs, label.new(bar_index, drEq, "EQ " + str.tostring(drEq, format.mintick), style=label.style_label_left, color=color.new(equilibriumColor, 25), textcolor=color.black, size=size.tiny))
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PHASE 4 ENGINE — TURTLE SOUP, JUDAS, POWER OF 3, SMT, DRAW ON LIQUIDITY
+// TURTLE SOUP, JUDAS, POWER OF 3, SMT, DRAW ON LIQUIDITY
 // ═══════════════════════════════════════════════════════════════════════════
-// Runs last in the engine because every one of these reads something produced
-// above it: the purge registry, the CISD and structure events, the dealing range
-// that decides premium from discount, and the killzone map from the top of the
-// file.
+// Runs last in the engine: every one of these reads something produced above it
+// — the purge registry, the CISD and structure events, the dealing range that
+// decides premium from discount, and the killzone map from the top of the file.
 
 // The true day rolls at New York midnight, so the day's narrative state rolls
 // with it rather than with the exchange session.
@@ -3600,12 +3289,9 @@ if newNYDay
     po3ManipLevel := na
 
 // ── Turtle Soup ──────────────────────────────────────────────────────────────
-// The original Turtle system bought N-period breakouts; the soup is the trade
-// against them. Price runs the extreme of the lookback window, closes back
-// inside on the same bar, and the reversal is then confirmed by CISD or by a
-// structure shift within the confirm window. Without that second leg it is only
-// a long wick, which is precisely the mistake the Phase 2 rewrite removed from
-// the sweep detector.
+// Price runs the extreme of the lookback window, closes back inside on the same
+// bar, and the reversal is then confirmed by CISD or by a structure shift within
+// the confirm window.
 tsHighWin = ta.highest(high, tsLookback)[1]
 tsLowWin = ta.lowest(low, tsLookback)[1]
 
@@ -3693,9 +3379,7 @@ if canDetect and showPO3
 // ── SMT Divergence ───────────────────────────────────────────────────────────
 // Correlated instruments deliver the same story. When one makes a higher high
 // and its partner fails to, the move is not supported and the high is a raid on
-// liquidity rather than an expansion. Any disagreement at a pair of highs reads
-// bearish and any disagreement at a pair of lows reads bullish, whichever side
-// failed: the divergence itself is the signal, and the note records who blinked.
+// liquidity rather than an expansion.
 smtPH = ta.pivothigh(high, smtLen, smtLen)
 smtPL = ta.pivotlow(low, smtLen, smtLen)
 
@@ -3715,8 +3399,7 @@ if canDetect and smtAvailable and not na(smtPH)
                 eventLabel(bar_index - smtLen, smtPH, "SMT ▼", smtBearColor, false)
         else
             // SMT is a state at the most recent turn, not a permanent flag: a
-            // pivot pair that agrees clears it. Without this a divergence from
-            // fifty bars ago would veto every signal Phase 5 ever produced.
+            // pivot pair that agrees clears it.
             smtDir := "None"
             smtNote := ""
 
@@ -3742,9 +3425,7 @@ if canDetect and smtAvailable and not na(smtPL)
 // The ranking pass. Candidates are the whole unswept registry — every swing and
 // internal pivot, with equal-highs and equal-lows clusters weighted up by the
 // strength the registry already counted — plus the fixed reference levels the
-// entire market watches. The best pool on each side is kept, and the higher of
-// the two is the draw: the single level this engine believes price is being
-// delivered towards.
+// entire market watches.
 if canDetect and showDOL
     dolAboveScore := 0.0
     dolAbovePx := na
@@ -3754,17 +3435,20 @@ if canDetect and showDOL
     dolBelowName := ""
 
     for lv in liqLevels
-        if not lv.swept and not lv.broken
+        // The side test comes first. A level price has already traded through is
+        // spent whichever way it faces, and testing that before scoring halves
+        // the magnetism calls — and the exponential inside them — every bar.
+        if not lv.swept and not lv.broken and (lv.isHigh ? lv.price > close : lv.price < close)
             isEQ = lv.strength >= eqMinStrength
             lvW = isEQ ? 20.0 : lv.major ? 12.0 : 6.0
-            lvNm = isEQ ? (lv.isHigh ? "EQH" : "EQL") : lv.major ? (lv.isHigh ? "Swing High" : "Swing Low") : (lv.isHigh ? "Int High" : "Int Low")
             lvSc = poolMagnetism(lv.price, lv.isHigh, lvW, bar_index - nz(lv.firstBar, lv.barIdx), lv.strength)
-            if lvSc > 0
-                if lv.isHigh and lv.price > close and lvSc > dolAboveScore
+            if lvSc > (lv.isHigh ? dolAboveScore : dolBelowScore)
+                lvNm = isEQ ? (lv.isHigh ? "EQH" : "EQL") : lv.major ? (lv.isHigh ? "Swing High" : "Swing Low") : (lv.isHigh ? "Int High" : "Int Low")
+                if lv.isHigh
                     dolAboveScore := lvSc
                     dolAbovePx := lv.price
                     dolAboveName := lvNm
-                else if not lv.isHigh and lv.price < close and lvSc > dolBelowScore
+                else
                     dolBelowScore := lvSc
                     dolBelowPx := lv.price
                     dolBelowName := lvNm
@@ -3835,8 +3519,9 @@ sessionBG = (showSessions and showSessionBG) ? getSessionBGColor() : na
 bgcolor(sessionBG)
 
 // 3. Detect FVGs on the Current Timeframe.
-// Gated on canDetect so the forming bar cannot produce a zone that later vanishes.
-[currentBullish, currentBearish] = detectFVGs(high, low, close, open, timeframe.period, bar_index, minGapATR * volUnit, time[2], time)
+var FVG[] currentBullish = array.new<FVG>()
+var FVG[] currentBearish = array.new<FVG>()
+detectFVGs(high, low, close, open, timeframe.period, bar_index, minGapATR * volUnit, time[2], time, currentBullish, currentBearish)
 
 // 4. Add newly detected Current TF FVGs to the main arrays
 if canDetect
@@ -3846,20 +3531,15 @@ if canDetect
         array.push(bearishFVGs, fvg)
 
 // 5. Detect FVGs on the Higher Timeframe (if enabled).
-// The HTF ATR and the HTF candle timestamps travel with the request, so gaps are
-// sized against the higher timeframe's own volatility and boxes land on the
-// correct bars instead of being offset from the chart's bar_index.
-htfBullish_T = array.new<FVG>()
-htfBearish_T = array.new<FVG>()
+var FVG[] htfBullish_T = array.new<FVG>()
+var FVG[] htfBearish_T = array.new<FVG>()
+array.clear(htfBullish_T)
+array.clear(htfBearish_T)
 // The request is hoisted to the global scope and reuses the already-hoisted
 // atrRef expression, which Pine re-evaluates in the higher timeframe's context.
-// Leaving it inside `if mtfAnalysis` meant a stateful ta.* call lived in a
-// conditional branch — the same defect Phase 1 fixed in calculatePositionSize.
 [htf_h, htf_l, htf_c, htf_o, htf_barIdx, htf_atr, htf_t0, htf_t2] = request.security(syminfo.tickerid, higherTF, [high, low, close, open, bar_index, atrRef, time, time[2]], lookahead=barmerge.lookahead_off)
 if mtfAnalysis and (barstate.isfirst or nz(htf_barIdx[1]) != nz(htf_barIdx))
-    [htfBullishDetected, htfBearishDetected] = detectFVGs(htf_h, htf_l, htf_c, htf_o, higherTF, bar_index, minGapATR * math.max(nz(htf_atr), syminfo.mintick * 10), htf_t2, htf_t0)
-    htfBullish_T := htfBullishDetected
-    htfBearish_T := htfBearishDetected
+    detectFVGs(htf_h, htf_l, htf_c, htf_o, higherTF, bar_index, minGapATR * math.max(nz(htf_atr), syminfo.mintick * 10), htf_t2, htf_t0, htfBullish_T, htfBearish_T)
 
 // 6. Add newly detected HTF FVGs to the main arrays
 if canDetect
@@ -3868,16 +3548,26 @@ if canDetect
     for fvg in htfBearish_T
         array.push(bearishFVGs, fvg)
 
-// 7. Process mitigation, inversion (IFVG) and cleanup of old FVGs.
-// The inversion check lives inside this pass because a gap has to be examined
+// 7. The inversion check lives inside this pass because a gap has to be examined
 // against the current close before it is aged out or hidden.
 processAndCleanFVGs(bullishFVGs, low, high)
 processAndCleanFVGs(bearishFVGs, low, high)
 
+// 7a. Cache whether a live higher-timeframe gap exists on each side.
+if canDetect
+    itfGapBull := false
+    itfGapBear := false
+    if mtfAnalysis
+        for f in bullishFVGs
+            if not f.mitigated and f.timeframe != timeframe.period
+                itfGapBull := true
+                break
+        for f in bearishFVGs
+            if not f.mitigated and f.timeframe != timeframe.period
+                itfGapBear := true
+                break
+
 // 7b. Composite PD arrays — BPR and Unicorn.
-// Only evaluated when one of their ingredients appeared on this bar: a new gap
-// (either timeframe), or a zone flipping to Breaker. On every other bar this
-// costs nothing, which is what keeps the nested scans affordable.
 if canDetect
     if showBPR or showUnicorn
         for f in currentBullish
@@ -3904,9 +3594,7 @@ if canDetect
         pairUnicornForBreaker(bullishFVGs, 1)
         pairUnicornForBreaker(bearishFVGs, -1)
 
-// 7c. Did a Unicorn form on this bar? Read back off the zone map rather than
-// tracked through the pairing functions, because those cannot reassign a global
-// scalar — and the map is the single source of truth either way.
+// 7c. Did a Unicorn form on this bar?
 unicornFormed = false
 unicornFormedDir = 0
 if canDetect and showUnicorn
@@ -3917,9 +3605,6 @@ if canDetect and showUnicorn
             break
 
 // 7d. SNIPER ENGINE — the primary signal path.
-// Placed here rather than in the engine block above because it has to see the
-// completed picture for this bar: gaps detected and mitigated, composite arrays
-// paired, zones touched. Everything the cascade reads is already final.
 sniperFired = false
 if canDetect and enableSniper
     watchModelL := ""
@@ -3928,12 +3613,14 @@ if canDetect and enableSniper
     watchScoreS := 0.0
     [okL, scL, tierL, kindL, freshL, topL, botL] = sniperEvaluate(1, gateL)
     [okS, scS, tierS, kindS, freshS, topS, botS] = sniperEvaluate(-1, gateS)
-    liveScoreL := scL
-    liveScoreS := scS
     // Both directions passing every gate at once should not happen — the
     // dealing-range and HTF-bias gates alone are mutually exclusive — but if the
     // user has disarmed enough of them that it can, the higher stack score wins
     // rather than the engine firing two opposing trades on one candle.
+    sniperEvalBars += 1
+    if okL or okS
+        cascadePassBars += 1
+        bestScoreSeen := math.max(bestScoreSeen, math.max(scL, scS))
     takeLong = okL and (not okS or scL >= scS)
     sDir = takeLong ? 1 : -1
     sOK = takeLong ? okL : okS
@@ -3954,8 +3641,8 @@ if canDetect and enableSniper
             // The standard-deviation projections are the leg's own measured
             // targets and take precedence over R multiples whenever the leg runs
             // the trade's way; the draw on liquidity then takes the final one,
-            // because that is where the orders this trade is being taken for
-            // are actually resting. R multiples are the fallback throughout.
+            // because that is where the orders this trade is being taken for are
+            // actually resting. R multiples are the fallback throughout.
             sdUsable = oteValid and oteDir == sDir
             float sT1 = sDir == 1 ? sEntry + sRisk : sEntry - sRisk
             if sdUsable and not na(sd05) and (sDir == 1 ? sd05 > sT1 : sd05 < sT1)
@@ -3984,10 +3671,19 @@ if canDetect and enableSniper
                 sniperTP3 := sT3
                 sniperRR := sRR
                 sniperFired := true
+                signalCount += 1
                 sCol = sDir == 1 ? sniperBullColor : sniperBearColor
-                sTxt = (sDir == 1 ? "▲ SNIPER BUY " : "▼ SNIPER SELL ") + str.tostring(sScore, "#") + "\n" + sModel + "\n" + sNarr + "\n" + str.tostring(sRR, "#.#") + "R  ·  SL " + str.tostring(sSL, format.mintick)
-                array.push(sniperLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 2 : high + tapTol * 2, sTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(sCol, 8), textcolor=color.white, size=size.normal))
-                capLabels(sniperLabelRefs, 12)
+                // A flag, not an essay. Four lines of narrative per signal at
+                // normal size overlapped into an unreadable block wherever
+                // signals clustered, which made a hundred and fifty of them look
+                // like two. The reasoning lives in the tooltip, one hover away.
+                sTip = sModel + "\n" + sNarr + "\nscore " + str.tostring(sScore, "#") + "  ·  " + str.tostring(sRR, "#.#") + "R  ·  SL " + str.tostring(sSL, format.mintick)
+                // Two short lines rather than the four-line narrative that used to
+                // overlap into an unreadable slab, and pushed clear of the candle
+                // so it does not sit on top of the zone boxes or its own triangle.
+                sTxt = (sDir == 1 ? "▲ BUY " : "▼ SELL ") + str.tostring(sScore, "#") + "\n" + sModel
+                array.push(sniperLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 4 : high + tapTol * 4, sTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(sCol, 10), textcolor=color.white, size=size.normal, tooltip=sTip))
+                capLabels(sniperLabelRefs, 25)
                 if riskManagement
                     array.push(riskLevels, createSniperRisk(bar_index, sEntry, sSL, sT1, sT2, sT3, sDir == 1))
                     capRiskLevels()
@@ -4006,38 +3702,43 @@ if canDetect and enableSniper
                     array.push(watchLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol : high + tapTol, wTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(watchMarkColor, 45), textcolor=color.white, size=size.tiny))
                     capLabels(watchLabelRefs, 10)
 
-// 8. The purge, CISD, zone and QM engines all ran in the Phase 2 engine section
-// above, immediately after the structure engine they depend on. Nothing to do
-// here beyond drawing their output.
+// 8. Nothing to do here beyond drawing their output.
 
-// 9. Draw everything on the last bar only. Every draw function deletes its own
-// previous boxes/labels/lines before redrawing, so the total object count stays
-// bounded and never approaches the 500-per-type platform limits.
-if barstate.islast
+// 9. Draw everything on the last bar only.
+if uiRedraw
     drawFVGs()
     drawZones()
     drawPurges()
     drawCISD()
     drawQM()
     drawOTE()
-    // Phase 4: the liquidity map, the reference levels every desk watches, the
+    // The liquidity map, the reference levels every desk watches, the
     // Asian range, the True Day Open and the draw price is being delivered to.
     drawLiqPools()
     drawHTFLevels()
     drawAsiaRange()
     drawTimeAndDOL()
 
+// Signal markers. Every box on this chart carries a ▲/▼ telling you which way
+// the *array* faces, which makes a signal drawn as one more label impossible to
+// pick out. These are plotted on the price scale instead, so an entry is a
+// marker under or over the candle and nothing else on the chart looks like it.
+plotshape(sniperFired and sniperDir == 1, title="Sniper BUY", style=shape.triangleup, location=location.belowbar, color=sniperBullColor, size=size.normal)
+plotshape(sniperFired and sniperDir == -1, title="Sniper SELL", style=shape.triangledown, location=location.abovebar, color=sniperBearColor, size=size.normal)
+
 // 10. Generate entry signals (confirmed bars only in non-repainting mode)
 [bullResultEntries, bearResultEntries] = generateEntrySignals()
+
+plotshape(showLegacySignals and array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index), title="Legacy BUY", style=shape.triangleup, location=location.belowbar, color=color.new(buySignalColorInput, 35), size=size.tiny)
+plotshape(showLegacySignals and array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index), title="Legacy SELL", style=shape.triangledown, location=location.abovebar, color=color.new(sellSignalColorInput, 35), size=size.tiny)
 
 // 11. Process entry signals and update risk levels
 drawEntrySignals(bullResultEntries, bearResultEntries)
 if array.size(riskLevels) > 0
     updateRiskManagementLines()
 
-// 12. Update status table and the sniper gate checklist
+// 12. Update the dashboard
 updateStatusTable()
-updateGateTable()
 
 // 13. Process alerts
 currentSession = getCurrentSession()
@@ -4055,9 +3756,8 @@ if enableAlerts
     if maxPositionsHit
         alert("Maximum concurrent positions limit reached", alert.freq_once_per_bar)
 
-    // Phase 2 reversal triggers. CISD is the scout, structure is the
-    // confirmation; both are reported so the sequence is visible on the alert
-    // feed. Phase 5 replaces these with a single consolidated JSON payload.
+    // CISD is the scout, structure is the confirmation; both are reported so the
+    // sequence is visible on the alert feed.
     if bullCISD
         alert("CISD ▲ Bullish | level " + str.tostring(lastCISDLevel, format.mintick) + (cisdDisplaced ? " | displaced" : "") + (cisdPurgeUp ? " | post-purge" : "") + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
@@ -4073,16 +3773,14 @@ if enableAlerts
     if not na(lastQMBar) and lastQMBar == bar_index
         alert("Quasimodo " + lastQMDir + " | QML entry | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
-    // Phase 3: a Unicorn is the highest-tier array the engine can produce, so it
+    // A Unicorn is the highest-tier array the engine can produce, so it
     // is worth an alert on formation rather than waiting for an entry trigger.
-    // Phase 5 folds this into the single consolidated JSON payload.
     if unicornFormed
         alert("Unicorn " + (unicornFormedDir == 1 ? "▲ Bullish" : "▼ Bearish") + " | Breaker + FVG | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
-    // Phase 4 named patterns. Each one carries the level it is measured from —
-    // the raided extreme for Turtle Soup, the swept Asian edge for Judas — so the
-    // alert is actionable on its own. Phase 5 consolidates all of these into one
-    // JSON payload.
+    // Each one carries the level it is measured from — the raided extreme for
+    // Turtle Soup, the swept Asian edge for Judas — so the alert is actionable
+    // on its own.
     if not na(lastTSBar) and lastTSBar == bar_index
         alert("Turtle Soup " + lastTSDir + " | raid " + str.tostring(lastTSStop, format.mintick) + " | " + getActiveWindow() + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
@@ -4095,7 +3793,7 @@ if enableAlerts
     if not na(smtBar) and smtBar == bar_index and smtDir != "None"
         alert("SMT " + smtDir + " vs " + smtSymUsed + " | " + smtNote + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
-    // ── Phase 5: the consolidated payload ──
+    // ── The consolidated payload ──
     // One machine-readable message carrying everything a webhook or a bot needs
     // to place the trade: the named model, the direction, the invalidation-based
     // stop, all three objectives, the realised R and the narrative that explains
