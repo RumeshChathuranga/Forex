@@ -71,6 +71,7 @@ maxTradeHours = input.int(24, "Max Trade Duration (hours)", minval=1, maxval=168
 
 // New Risk Management Additions
 maxConcurrentPositions = input.int(3, "Max Concurrent Positions", minval=1, maxval=10, group=riskSection)
+maxTrackedTrades = input.int(12, "Max Tracked Trades (drawing budget)", minval=2, maxval=40, group=riskSection, tooltip="Each tracked trade owns five lines. This caps how many can exist at once so a burst of signals can never crowd the 500-line budget the zones and structure annotations share.")
 riskPerTrade = input.float(1.0, "Risk Per Trade (%)", minval=0.1, maxval=5.0, group=riskSection)
 
 // ===== CONFLUENCE SCORING SETTINGS =====
@@ -974,7 +975,10 @@ var float watchScoreL = 0.0
 var float watchScoreS = 0.0
 var string watchModelL = ""
 var string watchModelS = ""
+var float liveScoreL = 0.0
+var float liveScoreS = 0.0
 var label[] sniperLabelRefs = array.new<label>()
+var label[] watchLabelRefs = array.new<label>()
 
 
 
@@ -2143,10 +2147,12 @@ drawFVGs() =>
     // with every slider at maximum the tracked label total stays under 500.
     // Phase 3 added the OTE/SD labels to that total and Phase 4 added the pool,
     // HTF-level, Asian range, DOL, True Day Open and named-event labels, so the
-    // FVG share comes down by the same amount. With every slider at maximum the
+    // FVG share comes down by the same amount, and Phase 5's signal and watch
+    // labels take another slice: they are the engine's actual output, so the FVG
+    // score tags are the right thing to give up. With every slider at maximum the
     // tracked label total lands just under 500.
     capBoxes(fvgBoxRefs, 240)
-    capLabels(fvgLabelRefs, 70)
+    capLabels(fvgLabelRefs, 50)
     // The CE lines share the 500-line budget with SL/TP, structure, zone means
     // and the SD projections, so only the newest gaps keep theirs.
     capLines(fvgCELineRefs, 40)
@@ -2159,7 +2165,9 @@ generateEntrySignals() =>
     array.clear(bearTriggerRef)
 
     // canDetect holds signals back until the bar closes in non-repainting mode.
-    if not showEntrySignals or isMaxPositionsReached() or not canDetect
+    // showLegacySignals keeps this path dark unless it is asked for: the Phase 5
+    // sniper engine is the primary signal, and this one fires on a far lower bar.
+    if not showEntrySignals or not showLegacySignals or isMaxPositionsReached() or not canDetect
         [bullEntries, bearEntries]
     else
         if not respectTrend or marketStructure == "Uptrend"
@@ -2259,6 +2267,10 @@ generateEntrySignals() =>
 
 
 // ===== RISK MANAGEMENT =====
+// The partial-target lines are deleted unconditionally when a trade closes.
+// They used to be deleted only when showPartialTP was on, but they are created
+// either way — as invisible placeholders when it is off — so with the setting
+// disabled every closed trade leaked three lines against the 500-line budget.
 updateRiskManagementLines() =>
     if array.size(riskLevels) > 0
         for i = array.size(riskLevels) - 1 to 0
@@ -2271,41 +2283,41 @@ updateRiskManagementLines() =>
                     removePosition()
                     line.delete(riskLevel.slLine)
                     line.delete(riskLevel.tpLine)
-                    if showPartialTP
-                        line.delete(riskLevel.partialLine)
-                        line.delete(riskLevel.partialLine2)
-                        line.delete(riskLevel.partialLine3)
+                    line.delete(riskLevel.partialLine)
+                    line.delete(riskLevel.partialLine2)
+                    line.delete(riskLevel.partialLine3)
             
-            if riskLevel.active and riskLevel.signalType == "BUY"
+            // The entry bar is excluded from the hit test. The fill is at that
+            // bar's close, so the wick that tapped the array — the very move that
+            // produced the signal — must not be allowed to stop the trade out
+            // before it has begun.
+            if riskLevel.active and riskLevel.signalType == "BUY" and bar_index > riskLevel.entryBarIdx
                 if high >= riskLevel.tpPrice or low <= riskLevel.slPrice
                     riskLevel.active := false
                     removePosition()
                     line.delete(riskLevel.slLine)
                     line.delete(riskLevel.tpLine)
-                    if showPartialTP
-                        line.delete(riskLevel.partialLine)
-                        line.delete(riskLevel.partialLine2)
-                        line.delete(riskLevel.partialLine3)
-            else if riskLevel.active and riskLevel.signalType == "SELL"
+                    line.delete(riskLevel.partialLine)
+                    line.delete(riskLevel.partialLine2)
+                    line.delete(riskLevel.partialLine3)
+            else if riskLevel.active and riskLevel.signalType == "SELL" and bar_index > riskLevel.entryBarIdx
                 if low <= riskLevel.tpPrice or high >= riskLevel.slPrice
                     riskLevel.active := false
                     removePosition()
                     line.delete(riskLevel.slLine)
                     line.delete(riskLevel.tpLine)
-                    if showPartialTP
-                        line.delete(riskLevel.partialLine)
-                        line.delete(riskLevel.partialLine2)
-                        line.delete(riskLevel.partialLine3)
+                    line.delete(riskLevel.partialLine)
+                    line.delete(riskLevel.partialLine2)
+                    line.delete(riskLevel.partialLine3)
             
             if bar_index - riskLevel.entryBarIdx > 200 or not riskLevel.active
                 if riskLevel.active
                     removePosition()
                     line.delete(riskLevel.slLine)
                     line.delete(riskLevel.tpLine)
-                    if showPartialTP
-                        line.delete(riskLevel.partialLine)
-                        line.delete(riskLevel.partialLine2)
-                        line.delete(riskLevel.partialLine3)
+                    line.delete(riskLevel.partialLine)
+                    line.delete(riskLevel.partialLine2)
+                    line.delete(riskLevel.partialLine3)
                 array.remove(riskLevels, i)
                 continue
                 
@@ -2474,6 +2486,279 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
           positionSize=posSize,
           entryTime=time)
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SNIPER ENGINE  (PHASE 5)
+// ═══════════════════════════════════════════════════════════════════════════
+// Two stages, and the order matters. Stage A is a top-down cascade of hard
+// gates: HTF bias, intermediate array, dealing-range half, killzone, structure
+// state, liquidity taken, SMT, draw on liquidity, and finally a live array being
+// tapped. A setup that fails any armed gate does not score low — it does not
+// score at all, and nothing is drawn.
+//
+// Stage B is the weighted stack, applied only to what survived. It decides how
+// good a valid setup is, never whether it is valid. That separation is the whole
+// point: a confluence score alone will always eventually find eighty points of
+// agreement in a market that is doing the wrong thing.
+
+// ── Gate 1: an intermediate-timeframe array pointing the same way ────────────
+// A chart-timeframe gap on its own is a local event. The intermediate term
+// agreeing is what makes it part of something larger.
+itfArrayAgree(int dir) =>
+    bool ok = not mtfAnalysis
+    if not ok
+        if dir == 1
+            for f in bullishFVGs
+                if not f.mitigated and f.timeframe != timeframe.period
+                    ok := true
+                    break
+        else
+            for f in bearishFVGs
+                if not f.mitigated and f.timeframe != timeframe.period
+                    ok := true
+                    break
+    ok
+
+// ── Gate 4: structure has actually shifted this way, and recently ────────────
+// Any of the three resolutions counts — CISD is the scout, the swing event is
+// the confirmation, the internal break is the continuation — but all of them
+// have to be fresh. A CHoCH from forty bars ago is history, not a state.
+structStateOK(int dir) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    cisdOK = not na(lastCISDBar) and bar_index - lastCISDBar <= structValidWindow and lastCISDDir == dirStr
+    swingOK = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
+    intOK = not na(lastAnyStructBar) and bar_index - lastAnyStructBar <= structValidWindow and lastAnyStructDir == dirStr
+    cisdOK or swingOK or intOK
+
+// ── Gate 5: stops were run before the reversal ───────────────────────────────
+// A purge in the trade's direction, a Turtle Soup raid, or the day's Judas
+// swing. Reversals that take nothing on the way are the ones that fail.
+liquidityTaken(int dir) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    purgeOK = purgedRecently(dir, liqTakenWindow)
+    tsOK = lastTSDir == dirStr and not na(lastTSBar) and bar_index - lastTSBar <= liqTakenWindow
+    jdOK = judasDir == dirStr and not na(judasBar) and bar_index - judasBar <= liqTakenWindow
+    purgeOK or tsOK or jdOK
+
+// ── Gate 9: the entry trigger — a live array being tapped right now ──────────
+// Zones are searched first because they carry a real quality tier; gaps come
+// second at tier 3 if the intermediate term also sees them and tier 2 if only
+// this chart does. The tap has to reach the array's 50% mean — consequent
+// encroachment — not merely graze its far edge, and the candle has to be
+// reacting rather than slicing through.
+//
+// Freshness is read as `touches <= 1` because updateZones() has already counted
+// this bar's own contact by the time the sniper runs: an untouched zone being
+// tapped for the first time reads as one touch, not zero.
+bestTappedArray(int dir) =>
+    bool found = false
+    float bTop = na
+    float bBot = na
+    int bTier = 0
+    string bKind = ""
+    bool bFresh = false
+    for z in zones
+        if not z.active or z.dir != dir or z.kind == "VI" or z.confirmBar == bar_index
+            continue
+        tapped = dir == 1 ? (low <= z.mean + tapTol and low >= z.bottom - tapTol and close > open) : (high >= z.mean - tapTol and high <= z.top + tapTol and close < open)
+        if tapped
+            t = zoneTier(z)
+            if t > bTier
+                found := true
+                bTier := t
+                bTop := z.top
+                bBot := z.bottom
+                bKind := z.kind
+                bFresh := z.touches <= 1
+    if dir == 1
+        for f in bullishFVGs
+            if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
+                continue
+            ce = math.avg(f.top, f.bottom)
+            if low <= ce + tapTol and low >= f.bottom - tapTol and close > open
+                t = f.timeframe != timeframe.period ? 3 : 2
+                if t > bTier
+                    found := true
+                    bTier := t
+                    bTop := f.top
+                    bBot := f.bottom
+                    bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
+                    bFresh := not f.mitigated
+    else
+        for f in bearishFVGs
+            if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
+                continue
+            ce = math.avg(f.top, f.bottom)
+            if high >= ce - tapTol and high <= f.top + tapTol and close < open
+                t = f.timeframe != timeframe.period ? 3 : 2
+                if t > bTier
+                    found := true
+                    bTier := t
+                    bTop := f.top
+                    bBot := f.bottom
+                    bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
+                    bFresh := not f.mitigated
+    [found, bTop, bBot, bTier, bKind, bFresh]
+
+// ── Stage B: the weighted stack ─────────────────────────────────────────────
+sniperStack(int dir, int tier, bool fresh) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    safeW = math.max(wArray + wFresh + wOTE + wDisp + wSeq + wVol + wSMT + wTime + wDOLRoom, 1.0)
+    // Recomputed from lastDispUpBar rather than read from dispUpRecent, because
+    // that value is produced by the engine section further down the file and
+    // Pine resolves identifiers in file order.
+    dispUpFresh = lastDispUpBar >= 0 and bar_index - lastDispUpBar <= dispWindow
+    dispDnFresh = lastDispDnBar >= 0 and bar_index - lastDispDnBar <= dispWindow
+    inOTEBand = oteValid and oteDir == dir and close <= math.max(ote62, ote79) and close >= math.min(ote62, ote79)
+    cisdOK = not na(lastCISDBar) and bar_index - lastCISDBar <= structValidWindow and lastCISDDir == dirStr
+    swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
+    mssOK = swingFresh and lastStructEvent == "MSS"
+    room = na(dolPx) ? 0.0 : math.abs(dolPx - close) / math.max(volUnit, syminfo.mintick)
+
+    pArray = wArray * math.min(1.0, tier / 5.0)
+    pFresh = wFresh * (fresh ? 1.0 : 0.35)
+    pOTE = wOTE * (inOTEBand ? 1.0 : (oteValid and oteDir == dir ? 0.4 : 0.0))
+    pDisp = wDisp * ((dir == 1 ? dispUpFresh : dispDnFresh) ? 1.0 : 0.3)
+    // CISD and the swing event agreeing is the strongest sequence the engine
+    // recognises: the scout fired, and then the confirmation arrived behind it.
+    pSeq = wSeq * ((cisdOK ? 0.5 : 0.0) + (mssOK ? 0.5 : swingFresh ? 0.3 : 0.0))
+    pVol = wVol * scoreVolume()
+    pSMT = wSMT * (not smtAvailable ? 0.5 : smtDir == dirStr ? 1.0 : smtDir == "None" ? 0.5 : 0.0)
+    pTime = wTime * (inMacro ? 1.0 : inSilverBullet ? 0.85 : (inNYAMKZ or inLondonKZ) ? 0.6 : inAnyKZ ? 0.4 : 0.15)
+    pDOL = wDOLRoom * (dolDir == dir ? math.min(1.0, room / math.max(dolMinRoomATR * 2.0, 0.5)) : 0.0)
+
+    raw = (pArray + pFresh + pOTE + pDisp + pSeq + pVol + pSMT + pTime + pDOL) / safeW * 100.0
+    math.round(math.max(0.0, math.min(100.0, raw)), 0)
+
+// ── Stage A: run the cascade, record every gate, then score what survives ────
+// The gate array is passed in and written by index so the dashboard checklist
+// walks the same structure the engine does and can never drift out of step
+// with it.
+sniperEvaluate(int dir, array<bool> g) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    g0 = not gateHTF or htfBias == dir
+    g1 = not gateITF or itfArrayAgree(dir)
+    g2 = not gatePD or (not na(drEq) and (dir == 1 ? inDiscount : inPremium))
+    g3 = not gateKZ or inAnyKZ
+    g4 = not gateStruct or structStateOK(dir)
+    g5 = not gateLiq or liquidityTaken(dir)
+    g6 = not gateSMT or not smtAvailable or smtDir == "None" or smtDir == dirStr
+    g7 = not gateDOL or (dolDir == dir and not na(dolPx) and math.abs(dolPx - close) >= dolMinRoomATR * volUnit)
+    [tapped, aTop, aBot, aTier, aKind, aFresh] = bestTappedArray(dir)
+    array.set(g, 0, g0)
+    array.set(g, 1, g1)
+    array.set(g, 2, g2)
+    array.set(g, 3, g3)
+    array.set(g, 4, g4)
+    array.set(g, 5, g5)
+    array.set(g, 6, g6)
+    array.set(g, 7, g7)
+    array.set(g, 8, tapped)
+    allPass = g0 and g1 and g2 and g3 and g4 and g5 and g6 and g7 and tapped
+    score = allPass ? sniperStack(dir, aTier, aFresh) : 0.0
+    [allPass, score, aTier, aKind, aFresh, aTop, aBot]
+
+// ── Which model has actually formed ─────────────────────────────────────────
+// The engine names the setup rather than emitting a bare number, because "87"
+// tells you nothing about what to do when it goes wrong. The ICT 2022 Model
+// outranks everything else: it is the full sequence — liquidity taken, delivery
+// changed with displacement, entry from the array left behind — and when a
+// Unicorn or a Silver Bullet window is part of that sequence it belongs in the
+// narrative rather than replacing the name.
+sniperModelName(int dir, string kind, bool fresh) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    cisdOK = not na(lastCISDBar) and bar_index - lastCISDBar <= structValidWindow and lastCISDDir == dirStr
+    swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
+    mssOK = swingFresh and lastStructEvent == "MSS"
+    dispFresh = dir == 1 ? (lastDispUpBar >= 0 and bar_index - lastDispUpBar <= dispWindow) : (lastDispDnBar >= 0 and bar_index - lastDispDnBar <= dispWindow)
+    sweepOK = purgedRecently(dir, liqTakenWindow)
+    tsOK = lastTSDir == dirStr and not na(lastTSBar) and bar_index - lastTSBar <= liqTakenWindow
+    jdOK = judasDir == dirStr and not na(judasBar) and bar_index - judasBar <= liqTakenWindow
+    bool qmOK = false
+    for q in qmPatterns
+        if q.active and q.dir == dir and bar_index - q.barIdx <= qmMaxAge
+            qmOK := true
+            break
+    isGap = kind == "FVG" or kind == "HTF FVG"
+    inOTEBand = oteValid and oteDir == dir and close <= math.max(ote62, ote79) and close >= math.min(ote62, ote79)
+
+    string model = "PD Array Tap"
+    if (sweepOK or tsOK or jdOK) and (cisdOK or mssOK) and dispFresh
+        model := "ICT 2022 Model"
+    else if inSilverBullet and isGap
+        model := "Silver Bullet"
+    else if jdOK
+        model := "Judas Swing"
+    else if tsOK
+        model := "Turtle Soup"
+    else if kind == "Unicorn"
+        model := "Unicorn"
+    else if qmOK
+        model := "Quasimodo"
+    else if cisdOK and not mssOK
+        model := "CISD Scout"
+
+    smtWord = not smtAvailable ? "n/a" : smtDir == dirStr ? "confirmed" : smtDir == "None" ? "aligned" : "opposed"
+    narrative = kind + (fresh ? " fresh" : "") + (inOTEBand ? " + OTE" : "") + " in " + (dir == 1 ? "Discount" : "Premium") + " | " + getActiveWindow() + " | SMT " + smtWord + " | DOL: " + dolName
+    [model, narrative]
+
+// ── The stop comes from the setup's own invalidation ────────────────────────
+// Never a blanket ATR multiple. Turtle Soup and Judas stop beyond the raided
+// extreme, Quasimodo beyond the Head, everything with a purge behind it beyond
+// the purge wick, and the array edge is both the fallback and the floor: the
+// wider of the two is taken, because the trade is wrong if either is violated.
+sniperStop(int dir, float aTop, float aBot, string model) =>
+    buf = math.max(slPaddingATR * volUnit, syminfo.mintick * 2)
+    float ref = na
+    if model == "Turtle Soup" and not na(lastTSStop)
+        ref := lastTSStop
+    else if model == "Judas Swing" and not na(judasLevel)
+        ref := judasLevel
+    else if model == "Quasimodo"
+        for q in qmPatterns
+            if q.active and q.dir == dir
+                ref := q.head
+                break
+    if na(ref)
+        ref := purgeStopRef(dir)
+    edge = dir == 1 ? aBot : aTop
+    // An invalidation point price has already traded past is not one, so it is
+    // discarded in favour of the array edge.
+    if na(ref) or (dir == 1 ? ref >= close : ref <= close)
+        ref := edge
+    else
+        ref := dir == 1 ? math.min(ref, edge) : math.max(ref, edge)
+    dir == 1 ? ref - buf : ref + buf
+
+// A tracked trade built from explicit prices rather than from an FVG, so the
+// invalidation-based stop and the SD/DOL objectives survive intact. TP1 and TP2
+// are always drawn here: on a sniper signal they are the objectives, not
+// optional partials.
+createSniperRisk(int entryBar, float entry, float sl, float tp1, float tp2, float tp3, bool isLong) =>
+    posSize = calculatePositionSize(entry, sl)
+    slLine = line.new(entryBar, sl, bar_index, sl, color=slColor, width=2)
+    tpLine = line.new(entryBar, tp3, bar_index, tp3, color=tpColor, width=2)
+    p1 = line.new(entryBar, tp1, bar_index, tp1, color=partialTPColor, width=1, style=line.style_dashed)
+    p2 = line.new(entryBar, tp2, bar_index, tp2, color=partialTPColor, width=1, style=line.style_dotted)
+    // tp3 already has the solid target line above, so the third partial is a
+    // placeholder the lifecycle can delete alongside the others.
+    p3 = line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
+    addPosition()
+    RiskLevels.new(entryBarIdx=entryBar, entryPrice=entry, slPrice=sl, tpPrice=tp3, partialTP=tp1, partialTP2=tp2, partialTP3=tp3, signalType=isLong ? "BUY" : "SELL", lastBarDrawn=entryBar, active=true, slLine=slLine, tpLine=tpLine, partialLine=p1, partialLine2=p2, partialLine3=p3, trailActive=false, breakevenActive=false, positionSize=posSize, entryTime=time)
+
+// Hard cap on tracked trades. Each one owns five lines, and the array is
+// otherwise only trimmed by age or by being closed out, so a burst of signals
+// could quietly consume the line budget the zones and structure share.
+capRiskLevels() =>
+    while array.size(riskLevels) > maxTrackedTrades
+        r = array.shift(riskLevels)
+        if r.active
+            removePosition()
+        line.delete(r.slLine)
+        line.delete(r.tpLine)
+        line.delete(r.partialLine)
+        line.delete(r.partialLine2)
+        line.delete(r.partialLine3)
+
 // Signals are drawn against the exact zone that triggered them, captured in
 // bullTriggerRef / bearTriggerRef. Previously this re-scanned the array and took
 // the newest match, so the stop could be placed on an unrelated zone.
@@ -2626,7 +2911,7 @@ updateStatusTable() =>
         dimText    = color.rgb(160, 160, 180)
         brightText = color.white
         
-        var table dash = table.new(position.top_right, 2, 25, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        var table dash = table.new(position.top_right, 2, 27, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
         
         // ── Row 0: Header ──
         tickerName = syminfo.ticker
@@ -2716,8 +3001,13 @@ updateStatusTable() =>
         table.cell(dash, 1, 14, slMode + " | " + str.tostring(activeRiskLevels) + "/" + str.tostring(maxConcurrentPositions) + " pos", text_color=brightText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
         
         // ── Row 15: Signal Status ──
+        // The sniper engine owns this row; the legacy FVG tap only reaches it
+        // when the user has switched that path back on.
         signalText = nonRepaintMode ? "No Signal (confirmed)" : "No Signal"
         signalBG = color.new(color.gray, 50)
+        if not na(lastSniperBar) and lastSniperBar == bar_index
+            signalText := (sniperDir == 1 ? "▲ SNIPER BUY " : "▼ SNIPER SELL ") + str.tostring(sniperScore, "#")
+            signalBG := sniperDir == 1 ? accentGreen : accentRed
         if array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index)
             signalText := "▲ BUY ACTIVE"
             signalBG := accentGreen
@@ -2789,6 +3079,69 @@ updateStatusTable() =>
         narrColor = judasDir != "None" ? color.new(judasColor, 30) : lastTSDir != "None" ? color.new(tsColor, 35) : valueBG
         table.cell(dash, 0, 24, "Asia / Named", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
         table.cell(dash, 1, 24, asiaTxt + judasTxt + tsTxt, text_color=brightText, bgcolor=narrColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 25: the last thing the sniper engine actually fired ──
+        snipAge = na(lastSniperBar) ? "" : " (" + str.tostring(bar_index - lastSniperBar) + "b)"
+        snipText = na(lastSniperBar) ? "No signal yet" : (sniperDir == 1 ? "▲ " : "▼ ") + sniperModel + " " + str.tostring(sniperScore, "#") + " · " + str.tostring(sniperRR, "#.#") + "R" + snipAge
+        snipColor = na(lastSniperBar) ? color.new(color.gray, 50) : sniperDir == 1 ? color.new(sniperBullColor, 20) : color.new(sniperBearColor, 20)
+        table.cell(dash, 0, 25, "Last Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 25, snipText, text_color=na(lastSniperBar) ? brightText : color.black, bgcolor=snipColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 26: what the engine is waiting on right now ──
+        // Every gate passed on this side, the stack score simply has not cleared
+        // the threshold yet. The gate checklist panel shows which gate is the
+        // holdout when nothing reaches even this far.
+        watchText = watchModelL != "" ? "▲ " + watchModelL + " " + str.tostring(watchScoreL, "#") + "/" + str.tostring(aPlusThreshold, "#") : watchModelS != "" ? "▼ " + watchModelS + " " + str.tostring(watchScoreS, "#") + "/" + str.tostring(aPlusThreshold, "#") : "Gates not aligned"
+        watchColor2 = (watchModelL != "" or watchModelS != "") ? accentGold : color.new(color.gray, 50)
+        table.cell(dash, 0, 26, "On Watch", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 26, watchText, text_color=(watchModelL != "" or watchModelS != "") ? color.black : brightText, bgcolor=watchColor2, text_size=size.small, text_halign=text.align_center)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GATE CHECKLIST  (PHASE 5)
+// ═══════════════════════════════════════════════════════════════════════════
+// The panel that answers "why is nothing firing?". Every hard gate is listed in
+// cascade order with its live state for both directions: ✓ passing, ✗ blocking,
+// – disarmed in the settings. Read top to bottom it is the same reasoning the
+// engine just did, which means a quiet chart is explainable rather than broken.
+gateRow(table t, int row, string nm, int gi, bool armed) =>
+    okLong = array.get(gateL, gi)
+    okShort = array.get(gateS, gi)
+    passBG = color.new(color.rgb(0, 170, 90), 25)
+    failBG = color.new(color.rgb(180, 40, 40), 35)
+    offBG = color.new(color.gray, 60)
+    table.cell(t, 0, row, nm, text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(t, 1, row, not armed ? "–" : okLong ? "✓" : "✗", text_color=color.white, bgcolor=not armed ? offBG : okLong ? passBG : failBG, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, row, not armed ? "–" : okShort ? "✓" : "✗", text_color=color.white, bgcolor=not armed ? offBG : okShort ? passBG : failBG, text_size=size.tiny, text_halign=text.align_center)
+
+updateGateTable() =>
+    if barstate.islast and showGateTable and enableSniper
+        var table gt = table.new(position.bottom_right, 3, 12, bgcolor=color.new(color.rgb(20, 20, 35), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        table.cell(gt, 0, 0, "SNIPER GATES", text_color=color.rgb(255, 200, 40), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_left)
+        table.cell(gt, 1, 0, "▲", text_color=color.rgb(0, 220, 130), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_center)
+        table.cell(gt, 2, 0, "▼", text_color=color.rgb(255, 80, 110), bgcolor=color.new(color.rgb(20, 20, 35), 0), text_size=size.small, text_halign=text.align_center)
+        gateRow(gt, 1, "HTF Bias", 0, gateHTF)
+        gateRow(gt, 2, "ITF Array", 1, gateITF)
+        gateRow(gt, 3, "PD Range", 2, gatePD)
+        gateRow(gt, 4, "Killzone", 3, gateKZ)
+        gateRow(gt, 5, "Structure", 4, gateStruct)
+        gateRow(gt, 6, "Liquidity", 5, gateLiq)
+        gateRow(gt, 7, "SMT", 6, gateSMT)
+        gateRow(gt, 8, "DOL", 7, gateDOL)
+        // The tap is the entry trigger, never disarmable: with nothing being
+        // touched there is no setup to evaluate at all.
+        gateRow(gt, 9, "Array Tap", 8, true)
+        scoreBG = color.new(color.rgb(28, 28, 45), 5)
+        table.cell(gt, 0, 10, "Stack Score", text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
+        table.cell(gt, 1, 10, str.tostring(liveScoreL, "#"), text_color=liveScoreL >= aPlusThreshold ? color.black : color.white, bgcolor=liveScoreL >= aPlusThreshold ? color.new(color.rgb(0, 220, 130), 20) : scoreBG, text_size=size.tiny, text_halign=text.align_center)
+        table.cell(gt, 2, 10, str.tostring(liveScoreS, "#"), text_color=liveScoreS >= aPlusThreshold ? color.black : color.white, bgcolor=liveScoreS >= aPlusThreshold ? color.new(color.rgb(255, 80, 110), 20) : scoreBG, text_size=size.tiny, text_halign=text.align_center)
+        // Per side, so the row stays inside the three-column layout. The model
+        // that is on watch is named on the main dashboard's "On Watch" row.
+        watchBG = color.new(color.rgb(255, 200, 40), 30)
+        idleBG = color.new(color.gray, 55)
+        firedNow = not na(lastSniperBar) and lastSniperBar == bar_index
+        table.cell(gt, 0, 11, "Verdict", text_color=color.rgb(170, 170, 190), bgcolor=color.new(color.rgb(30, 30, 48), 5), text_size=size.tiny, text_halign=text.align_left)
+        table.cell(gt, 1, 11, firedNow and sniperDir == 1 ? "FIRED" : watchModelL != "" ? "WATCH" : "—", text_color=color.black, bgcolor=firedNow and sniperDir == 1 ? color.new(sniperBullColor, 15) : watchModelL != "" ? watchBG : idleBG, text_size=size.tiny, text_halign=text.align_center)
+        table.cell(gt, 2, 11, firedNow and sniperDir == -1 ? "FIRED" : watchModelS != "" ? "WATCH" : "—", text_color=color.black, bgcolor=firedNow and sniperDir == -1 ? color.new(sniperBearColor, 15) : watchModelS != "" ? watchBG : idleBG, text_size=size.tiny, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELIVERY RUN TRACKER
@@ -3563,6 +3916,96 @@ if canDetect and showUnicorn
             unicornFormedDir := z.dir
             break
 
+// 7d. SNIPER ENGINE — the primary signal path.
+// Placed here rather than in the engine block above because it has to see the
+// completed picture for this bar: gaps detected and mitigated, composite arrays
+// paired, zones touched. Everything the cascade reads is already final.
+sniperFired = false
+if canDetect and enableSniper
+    watchModelL := ""
+    watchModelS := ""
+    watchScoreL := 0.0
+    watchScoreS := 0.0
+    [okL, scL, tierL, kindL, freshL, topL, botL] = sniperEvaluate(1, gateL)
+    [okS, scS, tierS, kindS, freshS, topS, botS] = sniperEvaluate(-1, gateS)
+    liveScoreL := scL
+    liveScoreS := scS
+    // Both directions passing every gate at once should not happen — the
+    // dealing-range and HTF-bias gates alone are mutually exclusive — but if the
+    // user has disarmed enough of them that it can, the higher stack score wins
+    // rather than the engine firing two opposing trades on one candle.
+    takeLong = okL and (not okS or scL >= scS)
+    sDir = takeLong ? 1 : -1
+    sOK = takeLong ? okL : okS
+    sScore = takeLong ? scL : scS
+    if sOK
+        sKind = takeLong ? kindL : kindS
+        sFresh = takeLong ? freshL : freshS
+        sTop = takeLong ? topL : topS
+        sBot = takeLong ? botL : botS
+        [sModel, sNarr] = sniperModelName(sDir, sKind, sFresh)
+        sEntry = close
+        sSL = sniperStop(sDir, sTop, sBot, sModel)
+        sRisk = math.abs(sEntry - sSL)
+        // A stop tighter than a tenth of the volatility unit is not a stop, it
+        // is a rounding error, and the R multiples built on it would be fiction.
+        if sRisk >= 0.10 * volUnit
+            // ── Objectives ──
+            // The standard-deviation projections are the leg's own measured
+            // targets and take precedence over R multiples whenever the leg runs
+            // the trade's way; the draw on liquidity then takes the final one,
+            // because that is where the orders this trade is being taken for
+            // are actually resting. R multiples are the fallback throughout.
+            sdUsable = oteValid and oteDir == sDir
+            float sT1 = sDir == 1 ? sEntry + sRisk : sEntry - sRisk
+            if sdUsable and not na(sd05) and (sDir == 1 ? sd05 > sT1 : sd05 < sT1)
+                sT1 := sd05
+            float sT2 = sDir == 1 ? sEntry + sRisk * 2.0 : sEntry - sRisk * 2.0
+            if sdUsable and not na(sd10) and (sDir == 1 ? sd10 > sT2 : sd10 < sT2)
+                sT2 := sd10
+            float sT3 = sDir == 1 ? sEntry + sRisk * 3.0 : sEntry - sRisk * 3.0
+            if sdUsable and not na(sd20) and (sDir == 1 ? sd20 > sT3 : sd20 < sT3)
+                sT3 := sd20
+            if not na(dolPx) and dolDir == sDir and (sDir == 1 ? dolPx > sT2 : dolPx < sT2)
+                sT3 := dolPx
+            sRR = math.abs(sT3 - sEntry) / sRisk
+            cooled = na(lastSniperBar) or bar_index - lastSniperBar >= sniperCooldown
+
+            if sScore >= aPlusThreshold and sRR >= minSignalRR and cooled and not isMaxPositionsReached()
+                lastSniperBar := bar_index
+                sniperDir := sDir
+                sniperModel := sModel
+                sniperNarrative := sNarr
+                sniperScore := sScore
+                sniperEntry := sEntry
+                sniperSL := sSL
+                sniperTP1 := sT1
+                sniperTP2 := sT2
+                sniperTP3 := sT3
+                sniperRR := sRR
+                sniperFired := true
+                sCol = sDir == 1 ? sniperBullColor : sniperBearColor
+                sTxt = (sDir == 1 ? "▲ SNIPER BUY " : "▼ SNIPER SELL ") + str.tostring(sScore, "#") + "\n" + sModel + "\n" + sNarr + "\n" + str.tostring(sRR, "#.#") + "R  ·  SL " + str.tostring(sSL, format.mintick)
+                array.push(sniperLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 2 : high + tapTol * 2, sTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(sCol, 8), textcolor=color.white, size=size.normal))
+                capLabels(sniperLabelRefs, 12)
+                if riskManagement
+                    array.push(riskLevels, createSniperRisk(bar_index, sEntry, sSL, sT1, sT2, sT3, sDir == 1))
+                    capRiskLevels()
+            else
+                // Every gate passed and the setup still did not fire. Recording
+                // why is the point: this is what turns a quiet chart from
+                // "nothing is happening" into "here is what it is waiting for".
+                if takeLong
+                    watchModelL := sModel
+                    watchScoreL := sScore
+                else
+                    watchModelS := sModel
+                    watchScoreS := sScore
+                if showWatchMarker
+                    wTxt = "watch " + str.tostring(sScore, "#") + (sRR < minSignalRR ? " · " + str.tostring(sRR, "#.#") + "R" : "")
+                    array.push(watchLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol : high + tapTol, wTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(watchMarkColor, 45), textcolor=color.white, size=size.tiny))
+                    capLabels(watchLabelRefs, 10)
+
 // 8. The purge, CISD, zone and QM engines all ran in the Phase 2 engine section
 // above, immediately after the structure engine they depend on. Nothing to do
 // here beyond drawing their output.
@@ -3592,8 +4035,9 @@ drawEntrySignals(bullResultEntries, bearResultEntries)
 if array.size(riskLevels) > 0
     updateRiskManagementLines()
 
-// 12. Update status table
+// 12. Update status table and the sniper gate checklist
 updateStatusTable()
+updateGateTable()
 
 // 13. Process alerts
 currentSession = getCurrentSession()
@@ -3650,5 +4094,14 @@ if enableAlerts
     // would otherwise fire an alert announcing "SMT None".
     if not na(smtBar) and smtBar == bar_index and smtDir != "None"
         alert("SMT " + smtDir + " vs " + smtSymUsed + " | " + smtNote + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    // ── Phase 5: the consolidated payload ──
+    // One machine-readable message carrying everything a webhook or a bot needs
+    // to place the trade: the named model, the direction, the invalidation-based
+    // stop, all three objectives, the realised R and the narrative that explains
+    // the entry. Written with single quotes so the JSON's own double quotes need
+    // no escaping.
+    if sniperFired
+        alert('{"symbol":"' + syminfo.ticker + '","timeframe":"' + timeframe.period + '","model":"' + sniperModel + '","direction":"' + (sniperDir == 1 ? "long" : "short") + '","entry":' + str.tostring(sniperEntry, format.mintick) + ',"sl":' + str.tostring(sniperSL, format.mintick) + ',"tp1":' + str.tostring(sniperTP1, format.mintick) + ',"tp2":' + str.tostring(sniperTP2, format.mintick) + ',"tp3":' + str.tostring(sniperTP3, format.mintick) + ',"rr":' + str.tostring(sniperRR, "#.##") + ',"score":' + str.tostring(sniperScore, "#") + ',"session":"' + getActiveWindow() + '","dol":"' + dolName + '","narrative":"' + sniperNarrative + '"}', alert.freq_once_per_bar)
 
 
