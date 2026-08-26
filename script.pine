@@ -150,6 +150,36 @@ showQM = input.bool(true, "Show Quasimodo Patterns", group=qmSection)
 qmMinSweepATR = input.float(0.10, "Min Head Sweep Depth (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=qmSection, tooltip="How far the Head must run beyond the Left Shoulder for the sweep to be meaningful.")
 qmMaxAge = input.int(80, "QM Max Age (bars)", minval=10, maxval=400, group=qmSection)
 
+// ===== PD ARRAY ARSENAL (PHASE 3) =====
+// Every array below is a `kind` on the shared Phase 2 Zone object plus a
+// detection rule. Nothing here builds a parallel zone map, so freshness, touch
+// counting, the 50% mean threshold and the whole lifecycle come for free.
+pdSection = "PD Arrays (IFVG / BPR / Unicorn / Blocks)"
+showIFVG = input.bool(true, "Inversion FVGs (IFVG)", group=pdSection, tooltip="A gap that price closed clean through has not been filled, it has failed. It flips polarity and is re-published as a zone facing the other way — failed support becomes resistance.")
+ifvgPierceATR = input.float(0.05, "IFVG Close-Through Depth (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=pdSection, tooltip="How far beyond the far edge the body must close before the gap counts as inverted rather than merely filled.")
+showBPR = input.bool(true, "Balanced Price Ranges (BPR)", group=pdSection, tooltip="A bullish and a bearish FVG that overlap. The overlap itself is the array: price delivered inefficiently in both directions through the same band.")
+bprWindow = input.int(30, "BPR Pairing Window (bars)", minval=3, maxval=200, group=pdSection, tooltip="How far apart the two gaps may be created and still pair into one balanced range.")
+bprMinOverlapATR = input.float(0.04, "Min BPR Overlap (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=pdSection)
+showUnicorn = input.bool(true, "Unicorn Model (Breaker + FVG)", group=pdSection, tooltip="A breaker block overlapping a same-direction FVG. Structure failed and the reversal was delivered with displacement through the same band — the highest tier array in the engine.")
+unicornWindow = input.int(30, "Unicorn Pairing Window (bars)", minval=3, maxval=200, group=pdSection)
+showPropulsion = input.bool(true, "Propulsion Blocks", group=pdSection, tooltip="An order block that forms inside a live block of the same direction: the algorithm returning to its own level to continue delivery rather than to reverse.")
+showRejectionBlocks = input.bool(true, "Rejection Blocks", group=pdSection, tooltip="The wick of a pivot candle that speared liquidity and was thrown back. The block is the wick alone, body extreme to wick extreme.")
+rbWickRatio = input.float(0.55, "Rejection Wick / Range Ratio", minval=0.3, maxval=0.95, step=0.05, group=pdSection)
+rbMinWickATR = input.float(0.35, "Min Rejection Wick (x ATR)", minval=0.05, maxval=3.0, step=0.05, group=pdSection)
+showVI = input.bool(false, "Volume Imbalances", group=pdSection, tooltip="A gap between two candle bodies whose ranges still overlap — an imbalance too small to be an FVG. Off by default: they are numerous and price revisits them constantly.")
+viMinATR = input.float(0.10, "Min Volume Imbalance (x ATR)", minval=0.01, maxval=1.0, step=0.01, group=pdSection)
+showOG = input.bool(true, "Opening Gaps (NDOG / NWOG)", group=pdSection, tooltip="New Day and New Week Opening Gaps — the gap between the prior session close and the new session open. Reference levels: they are never retired for being traded through.")
+ogMinATR = input.float(0.02, "Min Opening Gap (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=pdSection)
+showFVGCE = input.bool(true, "Show FVG Consequent Encroachment", group=pdSection, tooltip="The 50% line of every live gap. This is where ICT entries are actually taken, not the far edge.")
+requireCETap = input.bool(true, "Require CE Tap for Entry", group=pdSection, tooltip="An entry only triggers once price reaches the gap's 50% line. Fewer signals, deeper and better-priced fills. Pair it with an FVG Mitigation Depth of 0.5 or deeper: a shallower depth retires the gap before price ever reaches its CE.")
+
+// ===== OTE & STANDARD DEVIATION PROJECTIONS =====
+oteSection = "OTE & Standard Deviation Projections"
+showOTE = input.bool(true, "Show OTE Band (0.62 / 0.705 / 0.79)", group=oteSection, tooltip="The Optimal Trade Entry retracement of the current impulse leg.")
+showSDProj = input.bool(true, "Show Standard Deviation Projections", group=oteSection, tooltip="Objectives projected past the leg extreme at 0.5 / 1 / 2 standard deviations of the leg itself.")
+useSDTargets = input.bool(true, "Use SD Projections as TP2 / TP3", group=oteSection, tooltip="Replaces the arbitrary 0.75R / 1.5R partials with the leg's own measured objectives, falling back to R-multiples when the current leg points against the trade.")
+oteMinLegATR = input.float(1.0, "Min Leg Size (x ATR)", minval=0.2, maxval=10.0, step=0.1, group=oteSection, tooltip="Legs smaller than this are noise and produce no OTE band or projections.")
+
 // ===== SMART ATR SL/TP SETTINGS =====
 atrSection = "Smart ATR SL/TP"
 useSmartATR = input.bool(true, "Use Smart ATR SL/TP", group=atrSection, tooltip="ATR-based stops that adapt to the instrument's own volatility — overrides fixed SL padding")
@@ -247,6 +277,24 @@ cisdBearColor = input.color(color.rgb(255, 90, 130), "Bearish CISD Color", group
 qmBullColor = input.color(color.rgb(90, 255, 160), "Bullish QM Color", group=colorSection)
 qmBearColor = input.color(color.rgb(255, 100, 100), "Bearish QM Color", group=colorSection)
 
+// Phase 3 PD-array colors
+ifvgBullColor = input.color(color.rgb(0, 200, 255, 70), "Bullish IFVG", group=colorSection)
+ifvgBearColor = input.color(color.rgb(255, 0, 120, 70), "Bearish IFVG", group=colorSection)
+bprBullColor = input.color(color.rgb(60, 255, 200, 62), "Bullish BPR", group=colorSection)
+bprBearColor = input.color(color.rgb(255, 80, 200, 62), "Bearish BPR", group=colorSection)
+unicornBullColor = input.color(color.rgb(180, 255, 0, 55), "Bullish Unicorn", group=colorSection)
+unicornBearColor = input.color(color.rgb(255, 190, 0, 55), "Bearish Unicorn", group=colorSection)
+propBullColor = input.color(color.rgb(0, 190, 255, 72), "Bullish Propulsion", group=colorSection)
+propBearColor = input.color(color.rgb(255, 130, 0, 72), "Bearish Propulsion", group=colorSection)
+rejBullColor = input.color(color.rgb(140, 255, 140, 76), "Bullish Rejection Block", group=colorSection)
+rejBearColor = input.color(color.rgb(255, 140, 140, 76), "Bearish Rejection Block", group=colorSection)
+viZoneColor = input.color(color.rgb(200, 200, 215, 82), "Volume Imbalance", group=colorSection)
+ogZoneColor = input.color(color.rgb(245, 245, 255, 84), "Opening Gap (NDOG / NWOG)", group=colorSection)
+ceLineColor = input.color(color.rgb(235, 235, 245, 55), "Consequent Encroachment Line", group=colorSection)
+oteBandColor = input.color(color.rgb(255, 200, 60, 86), "OTE Band", group=colorSection)
+oteLineColor = input.color(color.rgb(255, 200, 60), "OTE Levels", group=colorSection)
+sdProjColor = input.color(color.rgb(120, 220, 255), "SD Projection Levels", group=colorSection)
+
 // Apply transparency to colors
 bullishFVGColor = color.new(bullishFVGColorInput, bullishFVGTransp)
 bearishFVGColor = color.new(bearishFVGColorInput, bearishFVGTransp)
@@ -304,6 +352,7 @@ type FVG
     string fvgType
     string fvgVariant
     bool mitigated
+    int mitigatedBar     // the bar the gap was first penetrated to mitigationDepth
     string timeframe
     int creation_bar_idx
     float confluenceScore
@@ -329,7 +378,7 @@ type Zone
     float mean
     float wickTop
     float wickBottom
-    string kind          // "OB" | "Breaker" | "Mitigation"
+    string kind          // OB | Propulsion | Breaker | Mitigation | IFVG | BPR | Unicorn | Rejection | VI | NDOG | NWOG
     int dir              // +1 = demand (bullish), -1 = supply (bearish)
     int touches          // 0 = fresh = highest quality
     bool flipped         // has been violated and re-purposed in the opposite direction
@@ -468,6 +517,18 @@ var label[] cisdLabelRefs = array.new<label>()
 var line[] qmLineRefs = array.new<line>()
 var label[] qmLabelRefs = array.new<label>()
 
+// Phase 3 drawing references
+var line[] fvgCELineRefs = array.new<line>()
+var box[] oteBoxRefs = array.new<box>()
+var line[] oteLineRefs = array.new<line>()
+var label[] oteLabelRefs = array.new<label>()
+
+// A zone flipping to Breaker has to be visible to the Unicorn pairing pass, but
+// updateZones() cannot reassign a global scalar, so the bar index of the most
+// recent flip is parked in a one-element array — the same device the delivery
+// run and the signal trigger references use.
+var int[] flipFlag = array.new_int(1, -1)
+
 // Structure + dealing range drawing references
 var line[] structLineRefs = array.new<line>()
 var label[] structLabelRefs = array.new<label>()
@@ -539,6 +600,22 @@ var bool inDiscount = false
 // collection but may not reassign a global variable.
 var FVG[] bullTriggerRef = array.new<FVG>()
 var FVG[] bearTriggerRef = array.new<FVG>()
+
+// ── OTE leg and its standard deviation projections (Phase 3) ─────────────────
+// Declared here rather than where they are computed, because createRiskLevel()
+// reads them for TP2/TP3 and Pine resolves identifiers in file order. The values
+// are assigned in the engine section, after the dealing range that defines the
+// leg and before any signal consumes them.
+var int oteDir = 0
+var bool oteValid = false
+var float oteAnchor = na    // the leg's origin
+var float oteExtreme = na   // the leg's extreme, which keeps extending with price
+var float ote62 = na
+var float ote705 = na
+var float ote79 = na
+var float sd05 = na
+var float sd10 = na
+var float sd20 = na
 
 
 
@@ -960,6 +1037,64 @@ drawCISD() =>
 // candle is the last opposite-colour candle before that leg, which the delivery
 // run tracker already knows: the leg is the run, so the origin sits immediately
 // before the run started.
+// ── Generic constructor for every Phase 3 PD array ───────────────────────────
+// Order blocks keep their own builder below because they need the origin
+// candle's body/wick split. Everything else — IFVG, BPR, Unicorn, Rejection,
+// Volume Imbalance and the opening gaps — is a price range plus a `kind`, so it
+// comes through here and inherits the entire Phase 2 lifecycle unchanged.
+//
+// Dedupe is by kind + direction against either the same origin bar or a
+// materially identical price band, so a level that keeps re-qualifying stacks
+// one zone deep instead of twenty.
+//
+// Callers must finish iterating `zones` before calling this: it pushes, and the
+// push only happens after this function's own scan has ended.
+addZone(float zTop, float zBot, string kind, int dir, int cBar, string origin) =>
+    bool made = false
+    if not na(zTop) and not na(zBot) and zTop - zBot >= syminfo.mintick and not na(cBar)
+        dup = false
+        for z in zones
+            if z.active and z.kind == kind and z.dir == dir
+                if z.createdBar == cBar or (math.abs(z.top - zTop) <= tapTol and math.abs(z.bottom - zBot) <= tapTol)
+                    dup := true
+                    break
+        if not dup
+            array.push(zones, Zone.new(top=zTop, bottom=zBot, mean=math.avg(zTop, zBot), wickTop=zTop, wickBottom=zBot, kind=kind, dir=dir, touches=0, flipped=false, mitigated=false, active=true, createdBar=int(math.max(0, cBar)), confirmBar=bar_index, lastTouchBar=na, origin=origin))
+            made := true
+    made
+
+// Quality tier, 1 (weakest) to 5 (Unicorn). Being tested costs a tier, so a
+// touched Unicorn ranks alongside a fresh order block — which is the honest
+// comparison, and it is what the Phase 5 stack score will read.
+zoneTier(Zone z) =>
+    base = z.kind == "Unicorn" ? 5 : z.kind == "BPR" or z.kind == "Breaker" or z.kind == "Propulsion" ? 4 : z.kind == "OB" or z.kind == "IFVG" ? 3 : z.kind == "Mitigation" or z.kind == "Rejection" ? 2 : 1
+    int tier = base - (z.touches > 0 ? 1 : 0)
+    tier < 1 ? 1 : tier
+
+tierStars(int t) =>
+    t >= 5 ? "★★★★★" : t == 4 ? "★★★★" : t == 3 ? "★★★" : t == 2 ? "★★" : "★"
+
+// Whether a zone's kind is currently switched on for drawing.
+zoneVisible(Zone z) =>
+    z.kind == "Mitigation" ? showMitigationBlocks : z.kind == "Breaker" ? showBreakers : z.kind == "IFVG" ? showIFVG : z.kind == "BPR" ? showBPR : z.kind == "Unicorn" ? showUnicorn : z.kind == "Propulsion" ? showPropulsion : z.kind == "Rejection" ? showRejectionBlocks : z.kind == "VI" ? showVI : (z.kind == "NDOG" or z.kind == "NWOG") ? showOG : true
+
+// ── Rejection blocks ─────────────────────────────────────────────────────────
+// The wick of a pivot candle that speared liquidity and was thrown straight
+// back. The block is the wick alone — body extreme to wick extreme — because the
+// body is the range the algorithm was comfortable delivering in and the wick is
+// the range it was not.
+tryRejectionBlock(int off, bool isHigh) =>
+    if showRejectionBlocks and off >= 0 and off <= bar_index and off <= 450
+        rng = high[off] - low[off]
+        if rng > 0
+            bodyTop = math.max(open[off], close[off])
+            bodyBot = math.min(open[off], close[off])
+            wick = isHigh ? high[off] - bodyTop : bodyBot - low[off]
+            if wick >= rbWickRatio * rng and wick >= rbMinWickATR * volUnit
+                float rTop = isHigh ? high[off] : bodyBot
+                float rBot = isHigh ? bodyTop : low[off]
+                addZone(rTop, rBot, "Rejection", isHigh ? -1 : 1, bar_index - off, isHigh ? "wick ▼" : "wick ▲")
+
 findZoneOrigin(int runStartBar, bool wantDownCandle) =>
     int resOff = -1
     startOff = na(runStartBar) ? 1 : math.max(1, bar_index - runStartBar + 1)
@@ -1013,13 +1148,27 @@ createZone(int off, int dir, string origin) =>
             legSpan = dir == 1 ? high - low[off] : high[off] - low
             if zTop > zBot and legSpan >= zoneMinImpulseATR * volUnit
                 tookLiq = legTookLiquidity(off, dir == 1)
-                array.push(zones, Zone.new(top=zTop, bottom=zBot, mean=math.avg(zTop, zBot), wickTop=wTop, wickBottom=wBot, kind=tookLiq ? "OB" : "Mitigation", dir=dir, touches=0, flipped=false, mitigated=false, active=true, createdBar=oBar, confirmBar=bar_index, lastTouchBar=na, origin=origin))
+                // A block that forms inside a live block of the same direction is
+                // a propulsion block: the algorithm coming back to its own level
+                // to continue delivery rather than to reverse off it. Scanned
+                // here, before the push, so `zones` is never mutated mid-loop.
+                nested = false
+                if showPropulsion
+                    for zp in zones
+                        if zp.active and zp.dir == dir and (zp.kind == "OB" or zp.kind == "Breaker" or zp.kind == "Propulsion") and zTop >= zp.bottom and zBot <= zp.top
+                            nested := true
+                            break
+                kindTag = nested ? "Propulsion" : tookLiq ? "OB" : "Mitigation"
+                array.push(zones, Zone.new(top=zTop, bottom=zBot, mean=math.avg(zTop, zBot), wickTop=wTop, wickBottom=wBot, kind=kindTag, dir=dir, touches=0, flipped=false, mitigated=false, active=true, createdBar=oBar, confirmBar=bar_index, lastTouchBar=na, origin=origin))
 
 // Lifecycle: freshness, touch counting, and the Breaker transition. A violated
 // zone only becomes a Breaker if structure confirmed the new direction — failed
 // supply turning into demand. Without that confirmation it is simply spent.
 updateZones() =>
-    while array.size(zones) > maxZones * 4
+    // Phase 3 puts many more kinds through this map than Phase 2 did, so the
+    // working set is deeper than the drawn set. Drawing is still capped at
+    // maxZones; this only bounds memory.
+    while array.size(zones) > maxZones * 6
         array.shift(zones)
 
     n = array.size(zones)
@@ -1036,13 +1185,20 @@ updateZones() =>
                 continue
 
             structFresh = not na(lastAnyStructBar) and bar_index - lastAnyStructBar <= breakerWindow
-            violated = z.dir == 1 ? close < z.bottom : close > z.top
+            // Opening gaps are reference levels rather than tradeable blocks that
+            // get spent: price passes back and forth through an NWOG all week and
+            // the level still draws price. They age out; they are never violated
+            // and never exhausted by touches.
+            isRef = z.kind == "NDOG" or z.kind == "NWOG"
+            violated = not isRef and (z.dir == 1 ? close < z.bottom : close > z.top)
 
             if violated
                 // A violated zone only becomes a Breaker if structure confirmed
                 // the new direction — failed supply turning into demand. Without
-                // that confirmation the zone is simply spent.
-                canFlip = not z.flipped and showBreakers and structFresh and lastAnyStructDir == (z.dir == 1 ? "Bearish" : "Bullish")
+                // that confirmation the zone is simply spent. Only an order block
+                // can make that transition: that is what the term means, and an
+                // IFVG or a BPR that fails is finished rather than reborn.
+                canFlip = not z.flipped and showBreakers and (z.kind == "OB" or z.kind == "Propulsion") and structFresh and lastAnyStructDir == (z.dir == 1 ? "Bearish" : "Bullish")
                 if canFlip
                     z.kind := "Breaker"
                     z.dir := -z.dir
@@ -1052,6 +1208,9 @@ updateZones() =>
                     z.origin := z.dir == 1 ? "flip ▲" : "flip ▼"
                     // The breaker gets its own lifetime from the flip onwards
                     z.confirmBar := bar_index
+                    // Announce the flip so the Unicorn pass can pair it against
+                    // the gaps that already exist on this bar.
+                    array.set(flipFlag, 0, bar_index)
                 else
                     z.mitigated := true
                     z.active := false
@@ -1064,11 +1223,11 @@ updateZones() =>
                 if na(z.lastTouchBar) or z.lastTouchBar < bar_index - 1
                     z.touches += 1
                 z.lastTouchBar := bar_index
-            if z.touches > zoneMaxTouches
+            if z.touches > zoneMaxTouches and not isRef
                 z.active := false
 
 zoneColorFor(Zone z) =>
-    z.kind == "Breaker" ? (z.dir == 1 ? breakerBullColor : breakerBearColor) : z.kind == "Mitigation" ? (z.dir == 1 ? mitigationBullColor : mitigationBearColor) : (z.dir == 1 ? obBullColor : obBearColor)
+    z.kind == "Unicorn" ? (z.dir == 1 ? unicornBullColor : unicornBearColor) : z.kind == "BPR" ? (z.dir == 1 ? bprBullColor : bprBearColor) : z.kind == "IFVG" ? (z.dir == 1 ? ifvgBullColor : ifvgBearColor) : z.kind == "Propulsion" ? (z.dir == 1 ? propBullColor : propBearColor) : z.kind == "Rejection" ? (z.dir == 1 ? rejBullColor : rejBearColor) : z.kind == "VI" ? viZoneColor : (z.kind == "NDOG" or z.kind == "NWOG") ? ogZoneColor : z.kind == "Breaker" ? (z.dir == 1 ? breakerBullColor : breakerBearColor) : z.kind == "Mitigation" ? (z.dir == 1 ? mitigationBullColor : mitigationBearColor) : (z.dir == 1 ? obBullColor : obBearColor)
 
 drawZones() =>
     clearBoxes(zoneBoxRefs)
@@ -1078,27 +1237,34 @@ drawZones() =>
         drawn = 0
         n = array.size(zones)
         if n > 0
-            for idx = 0 to n - 1
-                i = n - 1 - idx
-                if i < 0 or drawn >= maxZones
+            // Two passes, high tier first, so the maxZones cap can never discard
+            // a live Unicorn or BPR in favour of a stale volume imbalance that
+            // merely happens to be newer.
+            for pass = 0 to 1
+                if drawn >= maxZones
                     break
-                z = array.get(zones, i)
-                if not z.active
-                    continue
-                if z.kind == "Mitigation" and not showMitigationBlocks
-                    continue
-                if z.kind == "Breaker" and not showBreakers
-                    continue
-                bg = zoneColorFor(z)
-                // Fresh zones get a solid, heavier border; used zones fade back
-                bx = box.new(z.createdBar, z.top, bar_index, z.bottom, bgcolor=bg, border_color=color.new(bg, 25), border_width=z.touches == 0 ? 2 : 1, border_style=z.touches == 0 ? line.style_solid : line.style_dashed)
-                array.push(zoneBoxRefs, bx)
-                if zoneShowMean
-                    array.push(zoneLineRefs, line.new(z.createdBar, z.mean, bar_index, z.mean, color=zoneMeanColor, width=1, style=line.style_dotted))
-                freshTag = z.touches == 0 ? "✦ fresh" : str.tostring(z.touches) + "t"
-                lbl = label.new(bar_index, z.dir == 1 ? z.bottom : z.top, z.kind + " " + (z.dir == 1 ? "▲" : "▼") + " " + freshTag + " | " + z.origin, style=label.style_label_left, color=color.new(bg, 15), textcolor=color.white, size=size.tiny)
-                array.push(zoneLabelRefs, lbl)
-                drawn += 1
+                for idx = 0 to n - 1
+                    i = n - 1 - idx
+                    if i < 0 or drawn >= maxZones
+                        break
+                    z = array.get(zones, i)
+                    if not z.active or not zoneVisible(z)
+                        continue
+                    tier = zoneTier(z)
+                    if (pass == 0 and tier < 4) or (pass == 1 and tier >= 4)
+                        continue
+                    bg = zoneColorFor(z)
+                    // Fresh zones get a solid, heavier border; used zones fade back
+                    bx = box.new(z.createdBar, z.top, bar_index, z.bottom, bgcolor=bg, border_color=color.new(bg, 25), border_width=z.touches == 0 ? 2 : 1, border_style=z.touches == 0 ? line.style_solid : line.style_dashed)
+                    array.push(zoneBoxRefs, bx)
+                    // The mean threshold is the consequent encroachment of the
+                    // zone: the level entries are taken at, on every kind.
+                    if zoneShowMean
+                        array.push(zoneLineRefs, line.new(z.createdBar, z.mean, bar_index, z.mean, color=zoneMeanColor, width=1, style=line.style_dotted))
+                    freshTag = z.touches == 0 ? "✦ fresh" : str.tostring(z.touches) + "t"
+                    lbl = label.new(bar_index, z.dir == 1 ? z.bottom : z.top, z.kind + " " + (z.dir == 1 ? "▲" : "▼") + " " + tierStars(tier) + " " + freshTag + " | " + z.origin, style=label.style_label_left, color=color.new(bg, 15), textcolor=color.white, size=size.tiny)
+                    array.push(zoneLabelRefs, lbl)
+                    drawn += 1
 
 // ═══════════════════════════════════════════════════════════════════════════
 // QUASIMODO
@@ -1140,6 +1306,125 @@ drawQM() =>
         capLines(qmLineRefs, 45)
         capLabels(qmLabelRefs, 15)
 
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPOSITE PD ARRAYS — BALANCED PRICE RANGE AND UNICORN
+// ═══════════════════════════════════════════════════════════════════════════
+// Both are intersections rather than new detections: a band that two independent
+// arrays agree on. They are only evaluated on the bars where one of their
+// ingredients appears — a new gap, or a breaker flipping — so the nested scans
+// never become a per-bar cost.
+
+// A bullish and a bearish FVG that overlap. The overlap itself is the array:
+// price delivered inefficiently in both directions through the same band, and it
+// is the newer gap that sets the direction because that is the leg that reversed.
+pairBPR(FVG f, int dir, array<FVG> opp) =>
+    float bTop = na
+    float bBot = na
+    int bBar = na
+    minOv = bprMinOverlapATR * volUnit
+    n = array.size(opp)
+    if n > 0
+        for idx = 0 to n - 1
+            o = array.get(opp, n - 1 - idx)
+            if o.mitigated or math.abs(o.creation_bar_idx - f.creation_bar_idx) > bprWindow
+                continue
+            ovTop = math.min(f.top, o.top)
+            ovBot = math.max(f.bottom, o.bottom)
+            if ovTop - ovBot >= minOv
+                bTop := ovTop
+                bBot := ovBot
+                bBar := int(math.min(f.start_idx, o.start_idx))
+                break
+    // Pushed after the scan, never during it.
+    if not na(bTop)
+        addZone(bTop, bBot, "BPR", dir, bBar, dir == 1 ? "BPR ▲" : "BPR ▼")
+
+// Unicorn: a breaker block overlapping a same-direction FVG. The breaker says
+// structure failed and reversed, the gap says the reversal was delivered with
+// displacement, and the band they share is where both statements are true. This
+// is the top tier array in the engine.
+//
+// Called on the bar a new gap forms, testing it against the live breakers.
+pairUnicornForFVG(FVG f, int dir) =>
+    float uTop = na
+    float uBot = na
+    int uBar = na
+    n = array.size(zones)
+    if n > 0
+        for idx = 0 to n - 1
+            z = array.get(zones, n - 1 - idx)
+            if not z.active or z.kind != "Breaker" or z.dir != dir or bar_index - z.confirmBar > unicornWindow
+                continue
+            ovTop = math.min(f.top, z.top)
+            ovBot = math.max(f.bottom, z.bottom)
+            if ovTop - ovBot >= syminfo.mintick
+                uTop := ovTop
+                uBot := ovBot
+                uBar := int(math.min(f.start_idx, z.createdBar))
+                break
+    if not na(uTop)
+        addZone(uTop, uBot, "Unicorn", dir, uBar, dir == 1 ? "Unicorn ▲" : "Unicorn ▼")
+
+// The mirror pass, run on the bar a zone flips to Breaker: the gap it overlaps
+// usually predates the flip, so it would never be found by the pass above.
+pairUnicornForBreaker(array<FVG> fvgs, int dir) =>
+    float bTop = na
+    float bBot = na
+    int bBar = na
+    nz2 = array.size(zones)
+    if nz2 > 0
+        for idx = 0 to nz2 - 1
+            z = array.get(zones, nz2 - 1 - idx)
+            if z.active and z.kind == "Breaker" and z.dir == dir and z.confirmBar == bar_index
+                bTop := z.top
+                bBot := z.bottom
+                bBar := z.createdBar
+                break
+    float uTop = na
+    float uBot = na
+    int uBar = na
+    if not na(bTop)
+        nf = array.size(fvgs)
+        if nf > 0
+            for idx = 0 to nf - 1
+                f = array.get(fvgs, nf - 1 - idx)
+                if f.mitigated or bar_index - f.creation_bar_idx > unicornWindow
+                    continue
+                ovTop = math.min(f.top, bTop)
+                ovBot = math.max(f.bottom, bBot)
+                if ovTop - ovBot >= syminfo.mintick
+                    uTop := ovTop
+                    uBot := ovBot
+                    uBar := int(math.min(f.start_idx, bBar))
+                    break
+    if not na(uTop)
+        addZone(uTop, uBot, "Unicorn", dir, uBar, dir == 1 ? "Unicorn ▲" : "Unicorn ▼")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OTE BAND AND STANDARD DEVIATION PROJECTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+// The band is drawn on the current impulse leg and the projections are that same
+// leg measured forward past its own extreme, which is what replaces the old
+// 0.75R / 1.5R partials with objectives the market itself defined.
+drawOTE() =>
+    clearBoxes(oteBoxRefs)
+    clearLines(oteLineRefs)
+    clearLabels(oteLabelRefs)
+    if oteValid
+        leftBar = int(math.max(0, math.min(nz(swingHighBar, bar_index - 50), nz(swingLowBar, bar_index - 50))))
+        if showOTE
+            bandTop = math.max(ote62, ote79)
+            bandBot = math.min(ote62, ote79)
+            array.push(oteBoxRefs, box.new(leftBar, bandTop, bar_index, bandBot, bgcolor=oteBandColor, border_color=color.new(oteLineColor, 70), border_width=1))
+            array.push(oteLineRefs, line.new(leftBar, ote705, bar_index, ote705, color=oteLineColor, width=1))
+            array.push(oteLabelRefs, label.new(bar_index, ote705, "OTE .705 " + (oteDir == 1 ? "▲" : "▼"), style=label.style_label_left, color=color.new(oteLineColor, 25), textcolor=color.black, size=size.tiny))
+        if showSDProj
+            array.push(oteLineRefs, line.new(leftBar, sd05, bar_index, sd05, color=color.new(sdProjColor, 55), width=1, style=line.style_dotted))
+            array.push(oteLineRefs, line.new(leftBar, sd10, bar_index, sd10, color=sdProjColor, width=1, style=line.style_dashed))
+            array.push(oteLineRefs, line.new(leftBar, sd20, bar_index, sd20, color=color.new(sdProjColor, 35), width=1, style=line.style_dotted))
+            array.push(oteLabelRefs, label.new(bar_index, sd10, "-1 SD", style=label.style_label_left, color=color.new(sdProjColor, 25), textcolor=color.black, size=size.tiny))
+            array.push(oteLabelRefs, label.new(bar_index, sd20, "-2 SD", style=label.style_label_left, color=color.new(sdProjColor, 45), textcolor=color.black, size=size.tiny))
+
 // ===== SMART ATR-BASED SL/TP =====
 // Distances scale with the instrument's own ATR, so no per-symbol boost is needed.
 getSmartATRSL() =>
@@ -1168,7 +1453,7 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
                     variant := "Breakaway"
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) < nz(l[0]) + (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
-                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("BISI", variant))
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("BISI", variant))
                 array.push(newBullishFVGs, newFVG)
 
         if detectSIBI
@@ -1179,7 +1464,7 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0) =>
                     variant := "Breakaway"
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) > nz(h[0]) - (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
-                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("SIBI", variant))
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("SIBI", variant))
                 array.push(newBearishFVGs, newFVG)
     [newBullishFVGs, newBearishFVGs]
 
@@ -1189,6 +1474,7 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
     while array.size(fvgArray) > 200
         array.shift(fvgArray)
 
+    ifvgDepth = ifvgPierceATR * volUnit
     size = array.size(fvgArray)
     if size > 0 
         for idx = 0 to size - 1
@@ -1199,6 +1485,22 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
             if bar_index - fvg.creation_bar_idx > fvgMaxAge
                 array.remove(fvgArray, i)
                 continue
+
+            // ── Inversion (IFVG) ────────────────────────────────────────────
+            // A body closing clean through the far edge has not filled the gap,
+            // it has failed it: the array flips polarity and is re-published as
+            // a zone facing the other way. Checked before mitigation, because
+            // the normal sequence is fill first and invert afterwards — which is
+            // also why a mitigated gap is kept in the array below instead of
+            // being deleted the moment it is tagged.
+            if showIFVG and canDetect and bar_index > fvg.candle3_idx
+                inverted = fvg.fvgType == "BISI" ? close < fvg.bottom - ifvgDepth : close > fvg.top + ifvgDepth
+                if inverted
+                    addZone(fvg.top, fvg.bottom, "IFVG", fvg.fvgType == "BISI" ? -1 : 1, fvg.start_idx, "inv " + fvg.timeframe)
+                    // The gap is consumed: it is a Zone now, not an FVG.
+                    array.remove(fvgArray, i)
+                    continue
+
             if not fvg.mitigated
                 isMitigated = false
                 gapHeight = fvg.top - fvg.bottom
@@ -1213,14 +1515,18 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
 
                 if isMitigated
                     fvg.mitigated := true
-                    if not showMitigated
-                        array.remove(fvgArray, i)
-                        continue
+                    fvg.mitigatedBar := bar_index
+                    // Deliberately not removed when showMitigated is off. A
+                    // filled gap is still a candidate for inversion, and the
+                    // drawing pass already skips mitigated gaps, so keeping it
+                    // costs nothing visually and preserves the IFVG path. Age-out
+                    // and the 200-deep cap retire it.
 
 // ===== DRAWING FUNCTIONS =====
 drawFVGs() =>
     clearBoxes(fvgBoxRefs)
     clearLabels(fvgLabelRefs)
+    clearLines(fvgCELineRefs)
     bullishSize = array.size(bullishFVGs)
     if bullishSize > 0
         for i = 0 to bullishSize - 1
@@ -1256,6 +1562,12 @@ drawFVGs() =>
             borderWidth = fvg.confluenceScore >= 70 ? 2 : 1
             newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
             array.push(fvgBoxRefs, newBox)
+
+            // Consequent encroachment — the gap's 50% line, which is the level
+            // ICT entries are actually taken at rather than the far edge.
+            if showFVGCE and not fvg.mitigated
+                ceLvl = math.avg(fvg.top, fvg.bottom)
+                array.push(fvgCELineRefs, line.new(fvg.start_time, ceLvl, right_time, ceLvl, xloc=xloc.bar_time, color=ceLineColor, width=1, style=line.style_dotted))
 
             // Score label
             if showScoreLabels and not fvg.mitigated
@@ -1306,6 +1618,10 @@ drawFVGs() =>
             newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
             array.push(fvgBoxRefs, newBox)
 
+            if showFVGCE and not fvg.mitigated
+                ceLvl = math.avg(fvg.top, fvg.bottom)
+                array.push(fvgCELineRefs, line.new(fvg.start_time, ceLvl, right_time, ceLvl, xloc=xloc.bar_time, color=ceLineColor, width=1, style=line.style_dotted))
+
             // Score label
             if showScoreLabels and not fvg.mitigated
                 scoreTier = getScoreTier(fvg.confluenceScore)
@@ -1324,8 +1640,13 @@ drawFVGs() =>
     // entire 500-label budget and silently push the structure, zone, purge, CISD
     // and QM annotations off the chart. Cap the oldest away to keep headroom:
     // with every slider at maximum the tracked label total stays under 500.
+    // Phase 3 added the OTE/SD labels to that total, so the FVG share comes down
+    // by the same amount to keep the worst case where it was.
     capBoxes(fvgBoxRefs, 240)
-    capLabels(fvgLabelRefs, 120)
+    capLabels(fvgLabelRefs, 110)
+    // The CE lines share the 500-line budget with SL/TP, structure, zone means
+    // and the SD projections, so only the newest gaps keep theirs.
+    capLines(fvgCELineRefs, 40)
 
 // ===== ENTRY SIGNAL GENERATION =====
 generateEntrySignals() =>
@@ -1343,7 +1664,11 @@ generateEntrySignals() =>
             if bullishSize > 0
                 for i = 0 to bullishSize - 1
                     fvg = array.get(bullishFVGs, i)
-                    if fvg.mitigated
+                    // A gap mitigated on an earlier bar is spent. A gap mitigated
+                    // on this bar was mitigated *by the tap being evaluated right
+                    // now* — reaching consequent encroachment is both the entry
+                    // trigger and the mitigation event, so it still counts.
+                    if fvg.mitigated and (na(fvg.mitigatedBar) or fvg.mitigatedBar < bar_index)
                         continue
                     if fvg.confluenceScore < minConfluenceScore
                         continue
@@ -1351,7 +1676,14 @@ generateEntrySignals() =>
                     entrySignal = false
                     // ATR-scaled tolerance. The old `fvg.bottom * 0.95` was a
                     // 165-point window on gold at 3300 and a 0.05 window on EURUSD.
-                    tappedZone = low <= fvg.top + tapTol and low >= fvg.bottom - tapTol and close > open
+                    //
+                    // Consequent encroachment: with requireCETap on, the tap has
+                    // to reach the gap's 50% line rather than merely graze its
+                    // upper edge. Fewer signals, and every one of them filled at
+                    // a materially better price.
+                    fvgCE = math.avg(fvg.top, fvg.bottom)
+                    tapUpper = requireCETap ? fvgCE : fvg.top
+                    tappedZone = low <= tapUpper + tapTol and low >= fvg.bottom - tapTol and close > open
 
                     if fvg.fvgVariant == "Perfect"
                         if tappedZone
@@ -1384,13 +1716,15 @@ generateEntrySignals() =>
             if bearishSize > 0
                 for i = 0 to bearishSize - 1
                     fvg = array.get(bearishFVGs, i)
-                    if fvg.mitigated
+                    if fvg.mitigated and (na(fvg.mitigatedBar) or fvg.mitigatedBar < bar_index)
                         continue
                     if fvg.confluenceScore < minConfluenceScore
                         continue
 
                     entrySignal = false
-                    tappedZone = high >= fvg.bottom - tapTol and high <= fvg.top + tapTol and close < open
+                    fvgCE = math.avg(fvg.top, fvg.bottom)
+                    tapLower = requireCETap ? fvgCE : fvg.bottom
+                    tappedZone = high >= tapLower - tapTol and high <= fvg.top + tapTol and close < open
 
                     if fvg.fvgVariant == "Perfect"
                         if tappedZone
@@ -1564,7 +1898,25 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
             partialTpPrice := entryPrice - (slDistance * partialTPPercent / 100)
             partialTpPrice2 := entryPrice - (slDistance * 0.75)
             partialTpPrice3 := entryPrice - (slDistance * 1.5)
-        
+
+        // ── Standard deviation objectives (Phase 3) ──
+        // 0.75R and 1.5R were arbitrary numbers that had nothing to do with the
+        // market being traded. The current impulse leg projected past its own
+        // extreme at 1 and 2 standard deviations is a real ICT objective, so it
+        // takes over TP2/TP3 whenever the leg runs the trade's way. When it does
+        // not, the R-multiples above stand as the fallback.
+        if useSDTargets and oteValid and oteDir == (isLong ? 1 : -1)
+            if isLong
+                if not na(sd10) and sd10 > entryPrice
+                    partialTpPrice2 := sd10
+                if not na(sd20) and sd20 > partialTpPrice2
+                    partialTpPrice3 := sd20
+            else
+                if not na(sd10) and sd10 < entryPrice
+                    partialTpPrice2 := sd10
+                if not na(sd20) and sd20 < partialTpPrice2
+                    partialTpPrice3 := sd20
+
         posSize = calculatePositionSize(entryPrice, slPrice)
         
 
@@ -1687,16 +2039,47 @@ updateStatusTable() =>
         breakerCount = 0
         mitigationCount = 0
         freshCount = 0
+        // ── Phase 3 PD arrays ──
+        ifvgCount = 0
+        bprCount = 0
+        unicornCount = 0
+        propCount = 0
+        rejCount = 0
+        refCount = 0
+        // The strongest live array, and how far price is from it — the headline
+        // the Phase 5 stack score will build its PD-array weighting on.
+        bestTier = 0
+        bestKind = ""
+        bestDir = 0
+        bestDist = 0.0
         for z in zones
             if z.active
                 if z.kind == "Breaker"
                     breakerCount += 1
                 else if z.kind == "Mitigation"
                     mitigationCount += 1
+                else if z.kind == "IFVG"
+                    ifvgCount += 1
+                else if z.kind == "BPR"
+                    bprCount += 1
+                else if z.kind == "Unicorn"
+                    unicornCount += 1
+                else if z.kind == "Propulsion"
+                    propCount += 1
+                else if z.kind == "Rejection"
+                    rejCount += 1
+                else if z.kind == "VI" or z.kind == "NDOG" or z.kind == "NWOG"
+                    refCount += 1
                 else
                     obCount += 1
                 if z.touches == 0
                     freshCount += 1
+                t = zoneTier(z)
+                if t > bestTier
+                    bestTier := t
+                    bestKind := z.kind
+                    bestDir := z.dir
+                    bestDist := math.abs(close - z.mean)
 
         livePurges = 0
         for s in liqSweeps
@@ -1723,7 +2106,7 @@ updateStatusTable() =>
         dimText    = color.rgb(160, 160, 180)
         brightText = color.white
         
-        var table dash = table.new(position.top_right, 2, 16, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        var table dash = table.new(position.top_right, 2, 19, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
         
         // ── Row 0: Header ──
         tickerName = syminfo.ticker
@@ -1823,6 +2206,27 @@ updateStatusTable() =>
             signalBG := accentRed
         table.cell(dash, 0, 15, "Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
         table.cell(dash, 1, 15, signalText, text_color=brightText, bgcolor=signalBG, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 16: Phase 3 PD array census ──
+        // Named arrText/arrColor, not pdText/pdColor: row 13's premium-discount
+        // cell already owns those two names in this scope.
+        arrText = "IFVG:" + str.tostring(ifvgCount) + " BPR:" + str.tostring(bprCount) + " UNI:" + str.tostring(unicornCount)
+        arrColor = unicornCount > 0 ? color.new(unicornBullColor, 20) : bprCount > 0 ? color.new(bprBullColor, 25) : valueBG
+        table.cell(dash, 0, 16, "PD Arrays", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 16, arrText, text_color=brightText, bgcolor=arrColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 17: the strongest array currently live, and its distance ──
+        bestText = bestTier == 0 ? "None live" : bestKind + " " + (bestDir == 1 ? "▲" : "▼") + " " + tierStars(bestTier) + " @" + str.tostring(bestDist / math.max(volUnit, syminfo.mintick), "#.#") + " ATR"
+        bestColor = bestTier >= 5 ? color.new(unicornBullColor, 15) : bestTier == 4 ? accentGreen : bestTier == 3 ? accentBlue : color.new(color.gray, 45)
+        table.cell(dash, 0, 17, "Best Array", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 17, bestText, text_color=brightText, bgcolor=bestColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 18: OTE band and the measured -1 SD objective ──
+        oteText = not oteValid ? "Leg too small" : (oteDir == 1 ? "▲ " : "▼ ") + str.tostring(ote705, format.mintick) + " | -1SD " + str.tostring(sd10, format.mintick)
+        inOTE = oteValid and close <= math.max(ote62, ote79) and close >= math.min(ote62, ote79)
+        oteColor = not oteValid ? color.new(color.gray, 50) : inOTE ? color.new(oteLineColor, 20) : valueBG
+        table.cell(dash, 0, 18, "OTE / SD", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 18, oteText + (inOTE ? " ◆IN" : ""), text_color=inOTE ? color.black : brightText, bgcolor=oteColor, text_size=size.small, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELIVERY RUN TRACKER
@@ -1932,6 +2336,8 @@ if canDetect and not na(swingPH)
     swingHighTaken := false
     pushPivot(bar_index - swingLen, swingPH, true)
     registerLiqLevel(bar_index - swingLen, swingPH, true, true)
+    // A pivot that was made by a wick rather than a body is a rejection block.
+    tryRejectionBlock(swingLen, true)
     if showMarketStructure
         pivLbl = label.new(bar_index - swingLen, swingPH, "H", style=label.style_label_down, color=color.new(downTrendColorInput, 55), textcolor=color.white, size=size.tiny)
         array.push(pivotLabelRefs, pivLbl)
@@ -1943,6 +2349,7 @@ if canDetect and not na(swingPL)
     swingLowTaken := false
     pushPivot(bar_index - swingLen, swingPL, false)
     registerLiqLevel(bar_index - swingLen, swingPL, false, true)
+    tryRejectionBlock(swingLen, false)
     if showMarketStructure
         pivLbl = label.new(bar_index - swingLen, swingPL, "L", style=label.style_label_up, color=color.new(upTrendColorInput, 55), textcolor=color.white, size=size.tiny)
         array.push(pivotLabelRefs, pivLbl)
@@ -1955,12 +2362,14 @@ if canDetect and not na(internalPH)
     intHighTaken := false
     if sweepTrackInternal
         registerLiqLevel(bar_index - internalLen, internalPH, true, false)
+    tryRejectionBlock(internalLen, true)
 if canDetect and not na(internalPL)
     intLowPrice := internalPL
     intLowBar := bar_index - internalLen
     intLowTaken := false
     if sweepTrackInternal
         registerLiqLevel(bar_index - internalLen, internalPL, false, false)
+    tryRejectionBlock(internalLen, false)
 
 // ── Draw a structure break (line back to the broken pivot + tag) ──
 drawStructureBreak(int fromBar, float price, string txt, color col, bool isUp) =>
@@ -2122,6 +2531,44 @@ else if zoneOnInternalBreaks and intBearBreak and zoneOriginDn > 0
     createZone(zoneOriginDn, -1, intBearEvt)
 
 // ═══════════════════════════════════════════════════════════════════════════
+// VOLUME IMBALANCES AND OPENING GAPS
+// ═══════════════════════════════════════════════════════════════════════════
+// A volume imbalance is a gap between two candle *bodies* whose ranges still
+// overlap: price crossed the area on a wick but never opened or closed inside
+// it. It is the smallest array in the methodology, which is why it is off by
+// default — price returns to them constantly and they would bury the chart.
+//
+// Both of these run after the zone pass, so updateZones() has already advanced
+// this bar and the fresh zones (confirmBar == bar_index) are left alone until
+// the next one.
+viGapUp = open - close[1]
+viGapDn = close[1] - open
+viMin = viMinATR * volUnit
+if canDetect and showVI and bar_index > 1
+    if viGapUp >= viMin and low <= high[1]
+        addZone(open, close[1], "VI", 1, bar_index - 1, "body gap ▲")
+    else if viGapDn >= viMin and high >= low[1]
+        addZone(close[1], open, "VI", -1, bar_index - 1, "body gap ▼")
+
+// NDOG / NWOG — the gap between the prior session's close and the new session's
+// open. timeframe.change() fires on the exchange's own session boundary, which
+// on FX and futures is the 17:00 New York roll the NDOG is defined against, so
+// there is no hand-rolled UTC hour here and the feed handles DST. Both are
+// reference levels: updateZones() never retires them for being traded through.
+newDayBar = timeframe.change("D")
+newWeekBar = timeframe.change("W")
+ogMin = math.max(ogMinATR * volUnit, syminfo.mintick)
+ogGapUp = open - close[1]
+ogGapDn = close[1] - open
+if canDetect and showOG and timeframe.isintraday and bar_index > 1
+    ogKind = newWeekBar ? "NWOG" : "NDOG"
+    if newWeekBar or newDayBar
+        if ogGapUp >= ogMin
+            addZone(open, close[1], ogKind, 1, bar_index - 1, ogKind)
+        else if ogGapDn >= ogMin
+            addZone(close[1], open, ogKind, -1, bar_index - 1, ogKind)
+
+// ═══════════════════════════════════════════════════════════════════════════
 // QUASIMODO — pattern-matched over the last three confirmed pivots
 // ═══════════════════════════════════════════════════════════════════════════
 // Bearish: Left Shoulder high -> Leg low -> Head high sweeping beyond the
@@ -2180,12 +2627,36 @@ drEq := na(drHigh) or na(drLow) ? na : math.avg(drHigh, drLow)
 inPremium := not na(drEq) and close > drEq
 inDiscount := not na(drEq) and close < drEq
 
+// ═══════════════════════════════════════════════════════════════════════════
+// OTE AND STANDARD DEVIATION PROJECTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+// The impulse leg runs from the older of the two live swing anchors to the
+// newer, and it is measured off the dealing range's own edges so the extreme
+// keeps extending while price is still delivering into it.
+//
+// Retracements at 0.62 / 0.705 / 0.79 back from the extreme are the Optimal
+// Trade Entry band. The same leg measured *forward* past the extreme at 0.5, 1
+// and 2 standard deviations gives objectives the market defined itself, and
+// those are what createRiskLevel() now uses for TP2 and TP3.
+legIsUp = nz(swingHighBar, -1) >= nz(swingLowBar, -1)
+oteValid := not na(drHigh) and not na(drLow) and (drHigh - drLow) >= oteMinLegATR * volUnit
+oteDir := legIsUp ? 1 : -1
+oteAnchor := legIsUp ? drLow : drHigh
+oteExtreme := legIsUp ? drHigh : drLow
+legRange = oteExtreme - oteAnchor
+ote62 := oteValid ? oteExtreme - legRange * 0.620 : na
+ote705 := oteValid ? oteExtreme - legRange * 0.705 : na
+ote79 := oteValid ? oteExtreme - legRange * 0.790 : na
+sd05 := oteValid ? oteExtreme + legRange * 0.5 : na
+sd10 := oteValid ? oteExtreme + legRange * 1.0 : na
+sd20 := oteValid ? oteExtreme + legRange * 2.0 : na
+
 if barstate.islast
     clearBoxes(drBoxRefs)
     clearLines(drLineRefs)
     clearLabels(drLabelRefs)
     if showDealingRange and not na(drEq)
-        drLeft = int(math.min(nz(swingHighBar, bar_index - 50), nz(swingLowBar, bar_index - 50)))
+        drLeft = int(math.max(0, math.min(nz(swingHighBar, bar_index - 50), nz(swingLowBar, bar_index - 50))))
         if showPDZones
             array.push(drBoxRefs, box.new(drLeft, drHigh, bar_index, drEq, bgcolor=premiumZoneColor, border_color=color.new(premiumZoneColor, 60), border_width=1))
             array.push(drBoxRefs, box.new(drLeft, drEq, bar_index, drLow, bgcolor=discountZoneColor, border_color=color.new(discountZoneColor, 60), border_width=1))
@@ -2240,9 +2711,53 @@ if canDetect
     for fvg in htfBearish_T
         array.push(bearishFVGs, fvg)
 
-// 7. Process Mitigation and Cleanup Old FVGs
+// 7. Process mitigation, inversion (IFVG) and cleanup of old FVGs.
+// The inversion check lives inside this pass because a gap has to be examined
+// against the current close before it is aged out or hidden.
 processAndCleanFVGs(bullishFVGs, low, high)
 processAndCleanFVGs(bearishFVGs, low, high)
+
+// 7b. Composite PD arrays — BPR and Unicorn.
+// Only evaluated when one of their ingredients appeared on this bar: a new gap
+// (either timeframe), or a zone flipping to Breaker. On every other bar this
+// costs nothing, which is what keeps the nested scans affordable.
+if canDetect
+    if showBPR or showUnicorn
+        for f in currentBullish
+            if showBPR
+                pairBPR(f, 1, bearishFVGs)
+            if showUnicorn
+                pairUnicornForFVG(f, 1)
+        for f in currentBearish
+            if showBPR
+                pairBPR(f, -1, bullishFVGs)
+            if showUnicorn
+                pairUnicornForFVG(f, -1)
+        for f in htfBullish_T
+            if showBPR
+                pairBPR(f, 1, bearishFVGs)
+            if showUnicorn
+                pairUnicornForFVG(f, 1)
+        for f in htfBearish_T
+            if showBPR
+                pairBPR(f, -1, bullishFVGs)
+            if showUnicorn
+                pairUnicornForFVG(f, -1)
+    if showUnicorn and array.get(flipFlag, 0) == bar_index
+        pairUnicornForBreaker(bullishFVGs, 1)
+        pairUnicornForBreaker(bearishFVGs, -1)
+
+// 7c. Did a Unicorn form on this bar? Read back off the zone map rather than
+// tracked through the pairing functions, because those cannot reassign a global
+// scalar — and the map is the single source of truth either way.
+unicornFormed = false
+unicornFormedDir = 0
+if canDetect and showUnicorn
+    for z in zones
+        if z.active and z.kind == "Unicorn" and z.confirmBar == bar_index
+            unicornFormed := true
+            unicornFormedDir := z.dir
+            break
 
 // 8. The purge, CISD, zone and QM engines all ran in the Phase 2 engine section
 // above, immediately after the structure engine they depend on. Nothing to do
@@ -2257,6 +2772,7 @@ if barstate.islast
     drawPurges()
     drawCISD()
     drawQM()
+    drawOTE()
 
 // 10. Generate entry signals (confirmed bars only in non-repainting mode)
 [bullResultEntries, bearResultEntries] = generateEntrySignals()
@@ -2302,5 +2818,11 @@ if enableAlerts
 
     if not na(lastQMBar) and lastQMBar == bar_index
         alert("Quasimodo " + lastQMDir + " | QML entry | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    // Phase 3: a Unicorn is the highest-tier array the engine can produce, so it
+    // is worth an alert on formation rather than waiting for an entry trigger.
+    // Phase 5 folds this into the single consolidated JSON payload.
+    if unicornFormed
+        alert("Unicorn " + (unicornFormedDir == 1 ? "▲ Bullish" : "▼ Bearish") + " | Breaker + FVG | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
 
