@@ -87,16 +87,99 @@ weightVariant = input.float(20.0, "Weight: FVG Variant", minval=0, maxval=100, s
 weightSession = input.float(15.0, "Weight: Session Timing", minval=0, maxval=100, step=5, group=confluenceSection)
 weightVolatility = input.float(10.0, "Weight: Volatility", minval=0, maxval=100, step=5, group=confluenceSection)
 
-// ===== GOLD SESSION SETTINGS =====
-sessionSection = "Gold Sessions"
+// ===== SESSIONS, KILLZONES & TIME (PHASE 4) =====
+// Windows are session strings evaluated in a named timezone rather than fixed
+// UTC hours. ICT's entire clock is New York local time, and the old integer
+// hours drifted the whole map by an hour twice a year across the US and UK DST
+// changes — silently moving every killzone off the window it was meant to mark.
+sessionSection = "Sessions & Killzones"
 showSessions = input.bool(true, "Show Trading Sessions", group=sessionSection)
 showSessionBG = input.bool(true, "Session Background Highlight", group=sessionSection)
-londonOpen = input.int(8, "London Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
-londonClose = input.int(16, "London Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
-nyOpen = input.int(13, "New York Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
-nyClose = input.int(21, "New York Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
-asianOpen = input.int(0, "Asian Open (UTC Hour)", minval=0, maxval=23, group=sessionSection)
-asianClose = input.int(7, "Asian Close (UTC Hour)", minval=0, maxval=23, group=sessionSection)
+ictTZ = input.string("America/New_York", "Reference Timezone", options=["America/New_York", "Europe/London", "Asia/Tokyo", "UTC"], group=sessionSection, tooltip="Every killzone, macro and the True Day Open is defined against this clock. New York is the ICT standard and the only one the macro times were derived in.")
+kzLondonStr = input.session("0200-0500", "London Killzone", group=sessionSection)
+kzNYAMStr = input.session("0700-1000", "New York AM Killzone", group=sessionSection)
+kzLNCloseStr = input.session("1000-1200", "London Close Killzone", group=sessionSection)
+kzAsiaStr = input.session("2000-0000", "Asia Killzone", group=sessionSection)
+showMacros = input.bool(true, "Highlight ICT Macros", group=sessionSection, tooltip="The 20-minute windows either side of the hour where the algorithm reprices toward liquidity. Far more precise than a three-hour killzone block, and only resolvable on charts of 15 minutes or less.")
+showSilverBullet = input.bool(true, "Highlight Silver Bullet Windows", group=sessionSection, tooltip="10:00-11:00 New York is the flagship window; 03:00-04:00 London and 14:00-15:00 PM run the same model.")
+showTDO = input.bool(true, "True Day Open (NY Midnight)", group=sessionSection, tooltip="00:00 New York — not the exchange session open. Price delivering above it is bullish for the day, below it bearish.")
+showPO3 = input.bool(true, "Classify Power of 3 (AMD)", group=sessionSection, tooltip="Accumulation, Manipulation, Distribution — the day's three acts, anchored on the True Day Open.")
+showJudas = input.bool(true, "Judas Swing", group=sessionSection, tooltip="The first sweep of the Asian range inside a killzone, reversed: the false move that positions traders the wrong way before the real expansion.")
+
+// ===== LIQUIDITY POOLS & HTF LEVELS (PHASE 4) =====
+poolSection = "Liquidity Pools & HTF Levels"
+showEQ = input.bool(true, "Equal Highs / Lows (EQH / EQL)", group=poolSection, tooltip="Pivots inside the cluster tolerance are one pool of resting stops rather than several separate levels. The more pivots in the cluster, the more liquidity is parked there and the harder it pulls price.")
+eqMinStrength = input.int(2, "Min Pivots per Pool", minval=2, maxval=8, group=poolSection)
+poolMaxDrawn = input.int(8, "Max Pools Drawn", minval=2, maxval=20, group=poolSection)
+showPDHL = input.bool(true, "PDH / PDL (Previous Day)", group=poolSection)
+showPWHL = input.bool(true, "PWH / PWL (Previous Week)", group=poolSection)
+showPMHL = input.bool(false, "PMH / PML (Previous Month)", group=poolSection)
+showAsianRange = input.bool(true, "Asian Range Box", group=poolSection)
+showTurtleSoup = input.bool(true, "Turtle Soup", group=poolSection, tooltip="A raid of the N-period extreme that closes back inside it and is then confirmed by CISD or a structure shift. Without that second leg it is only a long wick.")
+tsLookback = input.int(20, "Turtle Soup Lookback (bars)", minval=5, maxval=200, group=poolSection)
+tsConfirmBars = input.int(5, "Turtle Soup Confirm Window (bars)", minval=1, maxval=20, group=poolSection)
+
+// ===== DRAW ON LIQUIDITY (PHASE 4) =====
+dolSection = "Draw on Liquidity (DOL)"
+showDOL = input.bool(true, "Show Draw on Liquidity", group=dolSection, tooltip="Ranks every unswept pool above and below price by how strongly it should attract delivery, and names the winner. That level is the objective a setup is measured to, instead of a fixed R multiple that has nothing to do with where the liquidity actually sits.")
+dolMinDistATR = input.float(0.75, "Min Distance to Qualify (x ATR)", minval=0.0, maxval=10.0, step=0.25, group=dolSection, tooltip="A pool closer than this is already in reach and is not an objective worth taking a trade for.")
+dolMaxDistATR = input.float(25.0, "Max Distance Considered (x ATR)", minval=2.0, maxval=200.0, step=1.0, group=dolSection)
+dolBiasWeight = input.float(12.0, "Directional Bias Weight", minval=0.0, maxval=50.0, step=1.0, group=dolSection, tooltip="How far premium/discount position and the swing trend tilt the ranking toward one side. Zero ranks purely on magnetism.")
+
+// ===== SNIPER SIGNAL ENGINE (PHASE 5) =====
+// The engine that decides whether anything is worth taking. It runs in two
+// stages: a top-down cascade of hard gates that all have to pass, and only then
+// a weighted stack score on what survived. A setup that fails one gate does not
+// score low — it does not score at all.
+sniperSection = "Sniper Engine (A+ Setups)"
+enableSniper = input.bool(true, "Enable Sniper Engine", group=sniperSection, tooltip="The primary signal path. Fires rarely by design: every gate below must pass before a setup is even scored.")
+aPlusThreshold = input.float(80.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every hard gate but score below this are shown as watch markers instead of signals.")
+showWatchMarker = input.bool(true, "Show Watch Markers", group=sniperSection, tooltip="A small tag where every gate passed but the stack score fell short. Useful for seeing how close the engine came, and why.")
+sniperCooldown = input.int(10, "Min Bars Between Signals", minval=0, maxval=200, group=sniperSection, tooltip="Stops one setup being re-signalled on every bar price spends inside the same array.")
+minSignalRR = input.float(2.0, "Min Reward:Risk to Fire", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="Measured from the invalidation-based stop to the draw on liquidity. A setup that cannot pay this is not taken however well it scores.")
+showLegacySignals = input.bool(false, "Also Show Legacy FVG Confluence Signals", group=sniperSection, tooltip="The Phase 1-3 FVG tap signal. Off by default: it fires far more often and on a much lower bar, which is exactly what this phase exists to replace.")
+
+// ===== SNIPER HARD GATES (PHASE 5) =====
+// Each gate can be switched off individually, and the dashboard checklist always
+// shows which are armed and which are currently passing, so a quiet chart is
+// explainable rather than mysterious.
+gateSection = "Sniper Hard Gates"
+gateHTF = input.bool(true, "Require HTF Bias Alignment", group=gateSection)
+htfBiasTF = input.string("240", "HTF Bias Timeframe", options=["60", "240", "D", "W"], group=gateSection)
+htfBiasLen = input.int(20, "HTF Structure Length (bars)", minval=5, maxval=100, group=gateSection, tooltip="A close beyond the extreme of this many higher-timeframe bars is a break of structure up there. The bias latches until the opposite extreme is broken.")
+gateITF = input.bool(true, "Require Intermediate PD Array Agreement", group=gateSection, tooltip="A live, unmitigated gap on the Multi-Timeframe higher timeframe pointing the same way as the trade.")
+gatePD = input.bool(true, "Require Correct Half of Dealing Range", group=gateSection, tooltip="Never buy in premium, never sell in discount.")
+gateKZ = input.bool(true, "Require Active Killzone", group=gateSection)
+gateStruct = input.bool(true, "Require Valid Structure State", group=gateSection, tooltip="Post-CISD, post-MSS/CHoCH, or a BOS continuation in the trade's direction.")
+structValidWindow = input.int(15, "Structure Valid For (bars)", minval=1, maxval=100, group=gateSection)
+gateLiq = input.bool(true, "Require Liquidity Taken", group=gateSection, tooltip="A purge, a Turtle Soup raid or a Judas swing in the trade's direction. Price has to have run stops before it reverses.")
+liqTakenWindow = input.int(20, "Liquidity Taken Within (bars)", minval=1, maxval=100, group=gateSection)
+gateSMT = input.bool(true, "Reject Opposing SMT Divergence", group=gateSection)
+gateDOL = input.bool(true, "Require Draw on Liquidity in Trade Direction", group=gateSection)
+dolMinRoomATR = input.float(2.0, "Min DOL Room (x ATR)", minval=0.5, maxval=20.0, step=0.5, group=gateSection)
+showGateTable = input.bool(true, "Show Gate Checklist Table", group=gateSection)
+
+// ===== SNIPER STACK WEIGHTS (PHASE 5) =====
+// Stage B. Applied only to setups that already cleared every armed gate, so
+// these decide *how good* a valid setup is, never whether it is valid.
+stackSection = "Sniper Stack Weights"
+wArray = input.float(20.0, "PD Array Quality", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Unicorn > BPR / Breaker > OB / IFVG > Mitigation / Rejection > bare gap.")
+wFresh = input.float(8.0, "Zone Freshness", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wOTE = input.float(10.0, "OTE Overlap", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wDisp = input.float(10.0, "Displacement Strength", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wSeq = input.float(12.0, "CISD + MSS Agreement", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wVol = input.float(8.0, "Volume", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wSMT = input.float(10.0, "SMT Confirmation", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wTime = input.float(12.0, "Timing (Macro / Silver Bullet)", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+wDOLRoom = input.float(10.0, "DOL Room & Alignment", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
+
+// ===== SMT DIVERGENCE (PHASE 4) =====
+smtSection = "SMT Divergence"
+smtMode = input.string("Auto", "Correlated Instrument", options=["Auto", "Manual", "Off"], group=smtSection, tooltip="Auto picks the partner by asset class: gold against DXY (inverse), EURUSD against GBPUSD, NQ against SPX, BTC against ETH, and so on.")
+smtSymbolInput = input.symbol("TVC:DXY", "Manual Symbol", group=smtSection)
+smtCorrMode = input.string("Auto", "Correlation", options=["Auto", "Positive", "Inverse"], group=smtSection, tooltip="An inverse partner is normalised by negating its series, so a single set of comparisons covers both cases.")
+smtLen = input.int(5, "SMT Pivot Length", minval=2, maxval=30, group=smtSection)
+showSMT = input.bool(true, "Show SMT Labels", group=smtSection)
 
 // ===== CISD — CHANGE IN STATE OF DELIVERY =====
 // The earliest reversal trigger in the engine. Where CHoCH waits for a swing
@@ -295,6 +378,29 @@ oteBandColor = input.color(color.rgb(255, 200, 60, 86), "OTE Band", group=colorS
 oteLineColor = input.color(color.rgb(255, 200, 60), "OTE Levels", group=colorSection)
 sdProjColor = input.color(color.rgb(120, 220, 255), "SD Projection Levels", group=colorSection)
 
+// Phase 4 — time, liquidity pool, DOL and named-pattern colors
+lnCloseSessionColor = input.color(color.rgb(120, 90, 200, 92), "London Close BG", group=colorSection)
+macroBGColor = input.color(color.rgb(255, 215, 0, 88), "ICT Macro BG", group=colorSection)
+sbBGColor = input.color(color.rgb(190, 190, 210, 90), "Silver Bullet BG", group=colorSection)
+eqhColor = input.color(color.rgb(255, 90, 90), "EQH Pool", group=colorSection)
+eqlColor = input.color(color.rgb(60, 220, 140), "EQL Pool", group=colorSection)
+pdhlColor = input.color(color.rgb(255, 170, 60), "PDH / PDL", group=colorSection)
+pwhlColor = input.color(color.rgb(120, 200, 255), "PWH / PWL", group=colorSection)
+pmhlColor = input.color(color.rgb(200, 130, 255), "PMH / PML", group=colorSection)
+asiaRangeColor = input.color(color.rgb(128, 0, 128, 88), "Asian Range Box", group=colorSection)
+tdoColor = input.color(color.rgb(235, 235, 245), "True Day Open", group=colorSection)
+dolUpColor = input.color(color.rgb(0, 255, 170), "DOL Above", group=colorSection)
+dolDnColor = input.color(color.rgb(255, 70, 120), "DOL Below", group=colorSection)
+judasColor = input.color(color.rgb(255, 120, 0), "Judas Swing", group=colorSection)
+tsColor = input.color(color.rgb(0, 200, 255), "Turtle Soup", group=colorSection)
+smtBullColor = input.color(color.rgb(90, 255, 200), "Bullish SMT", group=colorSection)
+smtBearColor = input.color(color.rgb(255, 110, 160), "Bearish SMT", group=colorSection)
+
+// Phase 5 — sniper signal colors
+sniperBullColor = input.color(color.rgb(0, 230, 118), "Sniper BUY", group=colorSection)
+sniperBearColor = input.color(color.rgb(255, 45, 85), "Sniper SELL", group=colorSection)
+watchMarkColor = input.color(color.rgb(150, 150, 170), "Watch Marker", group=colorSection)
+
 // Apply transparency to colors
 bullishFVGColor = color.new(bullishFVGColorInput, bullishFVGTransp)
 bearishFVGColor = color.new(bearishFVGColorInput, bearishFVGTransp)
@@ -396,6 +502,7 @@ type Zone
 type LiqLevel
     float price
     int barIdx
+    int firstBar        // the pivot that opened the cluster — the pool's left edge
     bool isHigh
     bool major           // major swing pivot vs faster internal pivot
     int strength         // how many pivots merged into this level
@@ -552,6 +659,154 @@ tapTol = tapToleranceATR * volUnit
 barConfirmed = barstate.isconfirmed
 canDetect = not nonRepaintMode or barConfirmed
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TIME ENGINE — KILLZONES, MACROS, SILVER BULLET, TRUE DAY OPEN, ASIAN RANGE
+// ═══════════════════════════════════════════════════════════════════════════
+// Placed ahead of everything else because time is not a filter bolted on at the
+// end — the window a setup forms in is part of what the setup *is*, and session
+// timing is one of the confluence factors scored further down this file.
+//
+// time(timeframe.period, session, timezone) returns na outside its window, so a
+// na-test is the membership test. The timezone argument is what makes the map
+// DST-correct: New York's own calendar moves the windows, not us.
+inLondonKZ = not na(time(timeframe.period, kzLondonStr, ictTZ))
+inNYAMKZ = not na(time(timeframe.period, kzNYAMStr, ictTZ))
+inLNCloseKZ = not na(time(timeframe.period, kzLNCloseStr, ictTZ))
+inAsiaKZ = not na(time(timeframe.period, kzAsiaStr, ictTZ))
+inAnyKZ = inLondonKZ or inNYAMKZ or inLNCloseKZ or inAsiaKZ
+
+// ── ICT macros ──
+// The 20-minute windows either side of the hour in which the algorithm reprices
+// to liquidity. Named individually because *which* macro is live matters: the
+// 09:50 and 10:50 windows carry the New York AM expansion, the 02:33 and 04:03
+// windows belong to London, and the afternoon pair runs into the futures close.
+// A 20-minute window cannot be resolved by a bar longer than it is, so macros
+// simply do not apply above the 15-minute chart.
+macroTFOK = timeframe.isintraday and timeframe.in_seconds() <= 900
+mLon1 = macroTFOK and not na(time(timeframe.period, "0233-0300", ictTZ))
+mLon2 = macroTFOK and not na(time(timeframe.period, "0403-0430", ictTZ))
+mNY1 = macroTFOK and not na(time(timeframe.period, "0850-0910", ictTZ))
+mNY2 = macroTFOK and not na(time(timeframe.period, "0950-1010", ictTZ))
+mNY3 = macroTFOK and not na(time(timeframe.period, "1050-1110", ictTZ))
+mNY4 = macroTFOK and not na(time(timeframe.period, "1150-1210", ictTZ))
+mPM1 = macroTFOK and not na(time(timeframe.period, "1310-1340", ictTZ))
+mPM2 = macroTFOK and not na(time(timeframe.period, "1515-1545", ictTZ))
+inMacro = mLon1 or mLon2 or mNY1 or mNY2 or mNY3 or mNY4 or mPM1 or mPM2
+macroName = mLon1 ? "02:33 LDN" : mLon2 ? "04:03 LDN" : mNY1 ? "08:50 NY" : mNY2 ? "09:50 NY" : mNY3 ? "10:50 NY" : mNY4 ? "11:50 NY" : mPM1 ? "13:10 PM" : mPM2 ? "15:15 PM" : ""
+
+// ── Silver Bullet ──
+// One hour, one model: take the FVG left by the displacement inside the window
+// and target the liquidity it was delivered away from. The 10:00-11:00 New York
+// window is the flagship; the other two run identically.
+sbLondon = not na(time(timeframe.period, "0300-0400", ictTZ))
+sbAM = not na(time(timeframe.period, "1000-1100", ictTZ))
+sbPM = not na(time(timeframe.period, "1400-1500", ictTZ))
+inSilverBullet = sbLondon or sbAM or sbPM
+sbName = sbAM ? "AM 10-11" : sbLondon ? "LDN 03-04" : sbPM ? "PM 14-15" : ""
+
+// ── True Day Open ──
+// Midnight New York, which is where the daily dealing range is actually opened,
+// rather than the exchange session open the chart happens to use. Derived from
+// the New York calendar date so the DST shift is handled by the same clock as
+// everything else above.
+nyDateIdx = dayofmonth(time, ictTZ)
+newNYDay = na(nyDateIdx[1]) or nyDateIdx != nyDateIdx[1]
+var float trueDayOpen = na
+var int tdoBar = na
+if newNYDay
+    trueDayOpen := open
+    tdoBar := bar_index
+tdoBiasUp = not na(trueDayOpen) and close > trueDayOpen
+
+// ── Asian range ──
+// Built live through the Asia killzone and then held: London and New York trade
+// *against* the range Asia left behind, so the values have to persist once the
+// session closes instead of resetting with it. Accumulation is monotonic — only
+// math.max / math.min — so the forming bar can extend the range but can never
+// retract it, and no non-repaint gate is needed here.
+var float asiaHigh = na
+var float asiaLow = na
+var int asiaStartBar = na
+var int asiaEndBar = na
+if inAsiaKZ
+    if not inAsiaKZ[1]
+        asiaHigh := high
+        asiaLow := low
+        asiaStartBar := bar_index
+    else
+        asiaHigh := math.max(nz(asiaHigh, high), high)
+        asiaLow := math.min(nz(asiaLow, low), low)
+    asiaEndBar := bar_index
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 4 DATA REQUESTS — HTF LEVELS AND THE CORRELATED INSTRUMENT
+// ═══════════════════════════════════════════════════════════════════════════
+// Four request.security() calls total, well inside the 40-call limit, and all of
+// them hoisted to the global scope so no stateful call ever lives in a branch.
+//
+// The previous-period extremes use lookahead_on *together with* a [1] offset on
+// the expression. That pairing is the documented non-repainting idiom: the value
+// being read is from a period that has already completed, so there is nothing to
+// look ahead into, and it becomes available on the first bar of the new period
+// rather than lagging a full period behind as lookahead_off would.
+[pdhRaw, pdlRaw] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+[pwhRaw, pwlRaw] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+[pmhRaw, pmlRaw] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+// How long the current period has been running, used as the "age" term when the
+// previous period's extreme is ranked as a draw on liquidity.
+barsSinceDay = ta.barssince(timeframe.change("D"))
+barsSinceWeek = ta.barssince(timeframe.change("W"))
+barsSinceMonth = ta.barssince(timeframe.change("M"))
+
+// ── Correlated instrument selection ──
+// syminfo.ticker is a simple string, so the whole chain below resolves at
+// compile time and request.security() accepts it. Only the metals pairing is
+// inverse; everything else moves with its partner.
+smtTk = str.upper(syminfo.ticker)
+smtIsXAU = str.contains(smtTk, "XAU") or str.contains(smtTk, "GOLD")
+smtIsXAG = str.contains(smtTk, "XAG") or str.contains(smtTk, "SILVER")
+smtIsEUR = str.contains(smtTk, "EURUSD")
+smtIsGBP = str.contains(smtTk, "GBPUSD")
+smtIsJPY = str.contains(smtTk, "USDJPY")
+smtIsAUD = str.contains(smtTk, "AUDUSD")
+smtIsNZD = str.contains(smtTk, "NZDUSD")
+smtIsCAD = str.contains(smtTk, "USDCAD")
+smtIsCHF = str.contains(smtTk, "USDCHF")
+smtIsNQ = str.contains(smtTk, "NQ") or str.contains(smtTk, "NAS") or str.contains(smtTk, "US100") or str.contains(smtTk, "NDX")
+smtIsES = str.contains(smtTk, "ES1") or str.contains(smtTk, "SPX") or str.contains(smtTk, "SPY") or str.contains(smtTk, "US500")
+smtIsYM = str.contains(smtTk, "YM1") or str.contains(smtTk, "DJI") or str.contains(smtTk, "US30")
+smtIsBTC = str.contains(smtTk, "BTC") or str.contains(smtTk, "XBT")
+smtIsETH = str.contains(smtTk, "ETH")
+autoSmtSym = smtIsXAU ? "TVC:DXY" : smtIsXAG ? "TVC:GOLD" : smtIsEUR ? "GBPUSD" : smtIsGBP ? "EURUSD" : smtIsJPY ? "USDCHF" : smtIsAUD ? "NZDUSD" : smtIsNZD ? "AUDUSD" : smtIsCAD ? "USDCHF" : smtIsCHF ? "USDJPY" : smtIsNQ ? "SPX" : smtIsES ? "NDX" : smtIsYM ? "SPX" : smtIsBTC ? "ETHUSD" : smtIsETH ? "BTCUSD" : syminfo.tickerid
+autoSmtInverse = smtIsXAU
+smtSymUsed = smtMode == "Manual" ? smtSymbolInput : autoSmtSym
+// ignore_invalid_symbol keeps an unavailable partner from erroring the whole
+// script out; it returns na and SMT reports itself unavailable instead.
+[smtHRaw, smtLRaw] = request.security(smtSymUsed, timeframe.period, [high, low], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+smtInverse = smtCorrMode == "Inverse" or (smtCorrMode == "Auto" and smtMode != "Manual" and autoSmtInverse)
+// Negating an inverse partner normalises it, so one set of higher-high /
+// lower-low comparisons covers both correlation types.
+smtHAdj = smtInverse ? -smtLRaw : smtHRaw
+smtLAdj = smtInverse ? -smtHRaw : smtLRaw
+smtAvailable = smtMode != "Off" and smtSymUsed != syminfo.tickerid and not na(smtHRaw)
+
+// ── Higher timeframe bias (Phase 5) ──
+// The top of the cascade. The structure engine itself is stateful global code
+// and cannot be evaluated inside a request, so the bias is derived the way a
+// break of structure is defined in the first place: a higher-timeframe close
+// beyond the extreme of the preceding htfBiasLen bars up there. The [1] offset
+// keeps the reference window closed, and the bias then *latches* — it stays
+// bullish until price closes below the opposing extreme, which is exactly how a
+// BOS holds until a CHoCH replaces it.
+[htfBiasClose, htfBiasHi, htfBiasLo] = request.security(syminfo.tickerid, htfBiasTF, [close, ta.highest(high, htfBiasLen)[1], ta.lowest(low, htfBiasLen)[1]], lookahead=barmerge.lookahead_off)
+var int htfBias = 0
+if not na(htfBiasClose)
+    if not na(htfBiasHi) and htfBiasClose > htfBiasHi
+        htfBias := 1
+    else if not na(htfBiasLo) and htfBiasClose < htfBiasLo
+        htfBias := -1
+
 // ===== ICT STRUCTURE ENGINE STATE =====
 // Swing structure drives the primary trend and the dealing range.
 var float swingHighPrice = na
@@ -616,6 +871,110 @@ var float ote79 = na
 var float sd05 = na
 var float sd10 = na
 var float sd20 = na
+
+// ── Phase 4 state: pools, Draw on Liquidity, named time patterns, SMT ────────
+// Declared here with the rest of the engine state rather than beside the logic
+// that fills them, because updateStatusTable() is defined long before the Phase
+// 4 engine section runs and Pine resolves identifiers in file order — a var
+// introduced next to its own logic would be invisible to the dashboard.
+var float dolPx = na
+var int dolDir = 0
+var string dolName = "None"
+var float dolScore = 0.0
+var float dolAbovePx = na
+var float dolBelowPx = na
+var float dolAboveScore = 0.0
+var float dolBelowScore = 0.0
+var string dolAboveName = ""
+var string dolBelowName = ""
+
+// Candidate buffer for the DOL ranking pass. Plain parallel scalars rather than
+// objects: the list is rebuilt on every bar and read once, and allocating a
+// dozen objects per bar for that is memory churn with nothing to show for it.
+var float[] refPx = array.new_float()
+var string[] refNm = array.new_string()
+var float[] refW = array.new_float()
+var int[] refAge = array.new_int()
+var bool[] refHigh = array.new_bool()
+
+// Turtle Soup: the raid is staged first and only becomes a pattern once the
+// reversal behind it is confirmed.
+var int tsPendDir = 0
+var int tsPendBar = na
+var float tsPendExtreme = na
+var float tsPendLevel = na
+var string lastTSDir = "None"
+var int lastTSBar = na
+var float lastTSStop = na
+
+// Judas swing and Power of 3, both reset on the true (New York midnight) day
+// rather than on the exchange session, because that is the open the day's range
+// is actually built from.
+var string judasDir = "None"
+var int judasBar = na
+var float judasLevel = na
+var bool judasDone = false
+var string po3Phase = "Accumulation"
+var int po3Dir = 0
+var float po3ManipLevel = na
+
+// SMT needs only the last two confirmed pivots on each series to answer the one
+// question it asks: did both instruments tell the same story at that turn?
+var float ourPHNew = na
+var float ourPHOld = na
+var float cmpPHNew = na
+var float cmpPHOld = na
+var float ourPLNew = na
+var float ourPLOld = na
+var float cmpPLNew = na
+var float cmpPLOld = na
+var string smtDir = "None"
+var int smtBar = na
+var string smtNote = ""
+
+// Phase 4 drawing references
+var line[] poolLineRefs = array.new<line>()
+var label[] poolLabelRefs = array.new<label>()
+var line[] htfLineRefs = array.new<line>()
+var label[] htfLabelRefs = array.new<label>()
+var box[] asiaBoxRefs = array.new<box>()
+var line[] asiaLineRefs = array.new<line>()
+var label[] asiaLabelRefs = array.new<label>()
+var line[] dolLineRefs = array.new<line>()
+var label[] dolLabelRefs = array.new<label>()
+var line[] timeLineRefs = array.new<line>()
+var label[] timeLabelRefs = array.new<label>()
+// Judas, Turtle Soup and SMT are drawn on the bar they happen rather than
+// redrawn on the last bar — the same treatment structure breaks get, because
+// the mark belongs to that candle — so they share one capped pool of labels.
+var label[] eventLabelRefs = array.new<label>()
+
+// ── Phase 5 state: the sniper engine's last verdict ─────────────────────────
+// The gate results live in bool arrays rather than a dozen scalars so the
+// dashboard checklist can walk them by index and stay in step with the engine
+// automatically. Index order is the cascade order, top-down:
+//   0 HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone
+//   4 structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 array tap
+var bool[] gateL = array.new_bool(9, false)
+var bool[] gateS = array.new_bool(9, false)
+var int lastSniperBar = na
+var int sniperDir = 0
+var string sniperModel = ""
+var string sniperNarrative = ""
+var float sniperScore = 0.0
+var float sniperEntry = na
+var float sniperSL = na
+var float sniperTP1 = na
+var float sniperTP2 = na
+var float sniperTP3 = na
+var float sniperRR = 0.0
+// What the engine is currently watching: every gate passed, score short of the
+// threshold. This is what makes a quiet chart legible instead of mysterious.
+var float watchScoreL = 0.0
+var float watchScoreS = 0.0
+var string watchModelL = ""
+var string watchModelS = ""
+var label[] sniperLabelRefs = array.new<label>()
 
 
 
@@ -760,24 +1119,24 @@ scoreVariant(variant) =>
         0.3
 
 // Factor 5: Session Timing (0.0 - 1.0)
-// London (08:00-16:00 UTC) and New York (13:00-21:00 UTC) sessions score highest
+// Rebuilt on the killzone map rather than on fixed UTC hours. The ranking is the
+// methodology's own: a macro window inside a killzone is the most precise time
+// the algorithm is known to act, an unscheduled hour the least.
 scoreSession() =>
-    currentHour = hour(time, "UTC")
-    // London & NY overlap (13:00-16:00 UTC) = best
-    if currentHour >= 13 and currentHour < 16
+    if inMacro
         1.0
-    // London session (08:00-13:00 UTC)
-    else if currentHour >= 8 and currentHour < 13
-        0.8
-    // NY session (16:00-21:00 UTC)
-    else if currentHour >= 16 and currentHour < 21
-        0.75
-    // Early London / Late NY
-    else if currentHour >= 7 and currentHour < 8 or currentHour >= 21 and currentHour < 22
-        0.5
-    // Asian session (00:00-07:00 UTC)
+    else if inSilverBullet
+        0.95
+    else if inNYAMKZ
+        0.9
+    else if inLondonKZ
+        0.85
+    else if inLNCloseKZ
+        0.65
+    else if inAsiaKZ
+        0.35
     else
-        0.3
+        0.2
 
 // Factor 6: Volatility Regime (0.0 - 1.0)
 // Healthy volatility (ATR near its average) scores best; extremes score lower
@@ -847,38 +1206,34 @@ calculatePositionSize(entryPrice, stopPrice) =>
             riskAdjustedSize = adjustedSize * (riskPerTrade / 100 / risk)
             math.max(0.1, math.min(2.0, riskAdjustedSize))
 
-// ===== GOLD SESSION AWARENESS =====
-// Determine current trading session
+// ===== KILLZONE AWARENESS =====
+// The killzone currently live, resolved from the DST-aware time engine above.
+// The windows are adjacent rather than overlapping by default, so the overlap
+// branch only fires if the user has widened one of them.
 getCurrentSession() =>
-    h = hour(time, "UTC")
-    isLondon = h >= londonOpen and h < londonClose
-    isNY = h >= nyOpen and h < nyClose
-    isAsian = h >= asianOpen and h < asianClose
-    isOverlap = isLondon and isNY
-    if isOverlap
-        "London/NY Overlap"
-    else if isLondon
-        "London"
-    else if isNY
-        "New York"
-    else if isAsian
-        "Asian"
-    else
-        "Off-Hours"
+    inLondonKZ and inNYAMKZ ? "London/NY Overlap" : inNYAMKZ ? "NY AM KZ" : inLondonKZ ? "London KZ" : inLNCloseKZ ? "London Close" : inAsiaKZ ? "Asia KZ" : "Off-KZ"
 
-// Get session background color
+// The most precise live window, for the dashboard and for signal labels: a macro
+// beats the Silver Bullet hour, which beats the killzone containing it.
+getActiveWindow() =>
+    inMacro ? "MACRO " + macroName : inSilverBullet ? "SB " + sbName : getCurrentSession()
+
+// Background shading follows the same precedence, so the narrow high-precision
+// windows stay visible inside the broad killzone blocks they sit in.
 getSessionBGColor() =>
-    h = hour(time, "UTC")
-    isLondon = h >= londonOpen and h < londonClose
-    isNY = h >= nyOpen and h < nyClose
-    isAsian = h >= asianOpen and h < asianClose
-    if isLondon and isNY
-        color.new(color.rgb(0, 200, 100), 92)  // Overlap = distinct
-    else if isLondon
-        londonSessionColor
-    else if isNY
+    if inMacro and showMacros
+        macroBGColor
+    else if inSilverBullet and showSilverBullet
+        sbBGColor
+    else if inLondonKZ and inNYAMKZ
+        color.new(color.rgb(0, 200, 100), 92)
+    else if inNYAMKZ
         nySessionColor
-    else if isAsian
+    else if inLondonKZ
+        londonSessionColor
+    else if inLNCloseKZ
+        lnCloseSessionColor
+    else if inAsiaKZ
         asianSessionColor
     else
         na
@@ -909,7 +1264,7 @@ registerLiqLevel(int idx, float price, bool isHigh, bool major) =>
             merged := true
             break
     if not merged
-        array.push(liqLevels, LiqLevel.new(price=price, barIdx=idx, isHigh=isHigh, major=major, strength=1, swept=false, broken=false, pierceBar=na, wickExtreme=price))
+        array.push(liqLevels, LiqLevel.new(price=price, barIdx=idx, firstBar=idx, isHigh=isHigh, major=major, strength=1, swept=false, broken=false, pierceBar=na, wickExtreme=price))
     while array.size(liqLevels) > 120
         array.shift(liqLevels)
 
@@ -1425,6 +1780,152 @@ drawOTE() =>
             array.push(oteLabelRefs, label.new(bar_index, sd10, "-1 SD", style=label.style_label_left, color=color.new(sdProjColor, 25), textcolor=color.black, size=size.tiny))
             array.push(oteLabelRefs, label.new(bar_index, sd20, "-2 SD", style=label.style_label_left, color=color.new(sdProjColor, 45), textcolor=color.black, size=size.tiny))
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LIQUIDITY POOLS, HTF LEVELS AND THE DRAW ON LIQUIDITY  (PHASE 4)
+// ═══════════════════════════════════════════════════════════════════════════
+// The registry built in Phase 2 already merges pivots inside the cluster
+// tolerance into a single level and counts how many merged, so an equal-highs
+// pool is simply a registry entry whose strength has grown past the threshold.
+// Nothing new has to be detected — the pool was already there, unnamed.
+
+// One event label, drawn on the bar the event happened, sharing a capped pool.
+eventLabel(int bIdx, float px, string txt, color col, bool up) =>
+    lb = label.new(bIdx, px, txt, style=up ? label.style_label_up : label.style_label_down, color=color.new(col, 15), textcolor=color.white, size=size.tiny)
+    array.push(eventLabelRefs, lb)
+    capLabels(eventLabelRefs, 18)
+
+// ── Magnetism ────────────────────────────────────────────────────────────────
+// Every unswept pool is a candidate objective; the question the DOL engine
+// answers is which one price is actually being delivered towards. Magnetism is
+// scored from five independent things:
+//
+//   base       what kind of level it is — a previous month high outranks an
+//              internal pivot by a wide margin
+//   cluster    how many pivots built it, because an equal-highs pool is a stack
+//              of stops rather than a single order
+//   age        liquidity that has rested untouched for longer is worth more to
+//              the algorithm than something printed twenty bars ago
+//   proximity  near levels pull harder, decaying smoothly so that two pools of
+//              the same kind are separated by distance and nothing else
+//   bias       premium/discount position and the swing trend tilt the ranking,
+//              which is what stops the engine naming a target behind price
+//
+// Anything inside dolMinDistATR is already in reach and is not an objective
+// worth taking a trade for, and anything past dolMaxDistATR is scenery.
+poolMagnetism(float px, bool isHigh, float baseW, int ageBars, int strength) =>
+    float sc = 0.0
+    dist = math.abs(px - close) / math.max(volUnit, syminfo.mintick)
+    if dist >= dolMinDistATR and dist <= dolMaxDistATR
+        prox = 26.0 * math.exp(-dist / 8.0)
+        cluster = math.min(18.0, math.max(0, strength - 1) * 7.0)
+        age = math.min(12.0, nz(ageBars) / 40.0)
+        float bias = 0.0
+        // In premium the draw is the sellside below, in discount the buyside
+        // above — the same rule that forbids buying premium in the first place.
+        if not na(drEq)
+            bias += (isHigh ? (inDiscount ? dolBiasWeight : -dolBiasWeight) : (inPremium ? dolBiasWeight : -dolBiasWeight)) * 0.5
+        if swingTrend != 0
+            bias += (isHigh ? (swingTrend == 1 ? dolBiasWeight : -dolBiasWeight) : (swingTrend == -1 ? dolBiasWeight : -dolBiasWeight)) * 0.5
+        sc := math.max(0.0, baseW + prox + cluster + age + bias)
+    sc
+
+// Add one fixed reference level (PDH/PDL, PWH/PWL, PMH/PML, Asian range edge) to
+// the DOL candidate buffer. Functions may mutate a global collection, which is
+// what lets this stay a one-line call per level instead of five parallel pushes.
+// A high level price has already traded above, or a low it has traded below, is
+// spent: the orders that rested there are filled. Only untaken levels can be a
+// draw, so the side test is the filter rather than a scoring penalty.
+pushRef(float px, string nm, float w, int ageBars, bool isHigh) =>
+    if not na(px) and (isHigh ? px > close : px < close)
+        array.push(refPx, px)
+        array.push(refNm, nm)
+        array.push(refW, w)
+        array.push(refAge, nz(ageBars))
+        array.push(refHigh, isHigh)
+
+// ── Drawing ──────────────────────────────────────────────────────────────────
+drawLiqPools() =>
+    clearLines(poolLineRefs)
+    clearLabels(poolLabelRefs)
+    if showEQ
+        drawn = 0
+        n = array.size(liqLevels)
+        if n > 0
+            for idx = 0 to n - 1
+                if drawn >= poolMaxDrawn
+                    break
+                lv = array.get(liqLevels, n - 1 - idx)
+                if lv.swept or lv.broken or lv.strength < eqMinStrength
+                    continue
+                col = lv.isHigh ? eqhColor : eqlColor
+                left = int(math.max(0, nz(lv.firstBar, lv.barIdx)))
+                array.push(poolLineRefs, line.new(left, lv.price, bar_index + 4, lv.price, color=color.new(col, 25), width=2, style=line.style_dashed))
+                array.push(poolLabelRefs, label.new(bar_index + 4, lv.price, (lv.isHigh ? "EQH" : "EQL") + " ×" + str.tostring(lv.strength), style=label.style_label_left, color=color.new(col, 20), textcolor=color.black, size=size.tiny))
+                drawn += 1
+
+// Previous day / week / month extremes. These are the levels every desk on the
+// planet can see, which is exactly why price is drawn to them.
+pushHTFLevel(float px, string nm, color col) =>
+    if not na(px)
+        left = int(math.max(0, bar_index - 120))
+        array.push(htfLineRefs, line.new(left, px, bar_index + 4, px, color=col, width=1, style=line.style_dotted))
+        array.push(htfLabelRefs, label.new(bar_index + 4, px, nm, style=label.style_label_left, color=color.new(col, 30), textcolor=color.black, size=size.tiny))
+
+drawHTFLevels() =>
+    clearLines(htfLineRefs)
+    clearLabels(htfLabelRefs)
+    if showPDHL
+        pushHTFLevel(pdhRaw, "PDH", pdhlColor)
+        pushHTFLevel(pdlRaw, "PDL", pdhlColor)
+    if showPWHL
+        pushHTFLevel(pwhRaw, "PWH", pwhlColor)
+        pushHTFLevel(pwlRaw, "PWL", pwhlColor)
+    if showPMHL
+        pushHTFLevel(pmhRaw, "PMH", pmhlColor)
+        pushHTFLevel(pmlRaw, "PML", pmhlColor)
+
+// The box covers the session that built the range; the two edges then project
+// forward on their own, because what matters after Asia closes is not the block
+// of time but the two levels London and New York will run.
+drawAsiaRange() =>
+    clearBoxes(asiaBoxRefs)
+    clearLines(asiaLineRefs)
+    clearLabels(asiaLabelRefs)
+    if showAsianRange and not na(asiaHigh) and not na(asiaLow)
+        l = int(math.max(0, nz(asiaStartBar, bar_index - 20)))
+        r = int(math.max(l + 1, nz(asiaEndBar, bar_index)))
+        array.push(asiaBoxRefs, box.new(l, asiaHigh, r, asiaLow, bgcolor=asiaRangeColor, border_color=color.new(asiaRangeColor, 35), border_width=1))
+        array.push(asiaLineRefs, line.new(r, asiaHigh, bar_index + 4, asiaHigh, color=color.new(asiaRangeColor, 25), width=1, style=line.style_dotted))
+        array.push(asiaLineRefs, line.new(r, asiaLow, bar_index + 4, asiaLow, color=color.new(asiaRangeColor, 25), width=1, style=line.style_dotted))
+        array.push(asiaLabelRefs, label.new(int(math.avg(l, r)), asiaHigh, "Asian Range " + str.tostring(asiaHigh - asiaLow, format.mintick), style=label.style_label_down, color=color.new(asiaRangeColor, 20), textcolor=color.white, size=size.tiny))
+
+// The True Day Open, and the winning draw on liquidity with its runner-up on the
+// far side for context — one thick line for where price is going, one faint one
+// for what it would have to pass through to go the other way.
+drawTimeAndDOL() =>
+    clearLines(timeLineRefs)
+    clearLabels(timeLabelRefs)
+    clearLines(dolLineRefs)
+    clearLabels(dolLabelRefs)
+    if showTDO and not na(trueDayOpen)
+        left = int(math.max(0, nz(tdoBar, bar_index - 50)))
+        array.push(timeLineRefs, line.new(left, trueDayOpen, bar_index + 4, trueDayOpen, color=color.new(tdoColor, 20), width=1))
+        array.push(timeLabelRefs, label.new(bar_index + 4, trueDayOpen, "TDO " + (tdoBiasUp ? "▲" : "▼"), style=label.style_label_left, color=color.new(tdoColor, 25), textcolor=color.black, size=size.tiny))
+    if showDOL
+        if not na(dolPx)
+            col = dolDir == 1 ? dolUpColor : dolDnColor
+            left = int(math.max(0, bar_index - 80))
+            array.push(dolLineRefs, line.new(left, dolPx, bar_index + 12, dolPx, color=col, width=3))
+            array.push(dolLabelRefs, label.new(bar_index + 12, dolPx, "◀ DOL " + dolName + " " + str.tostring(dolPx, format.mintick), style=label.style_label_left, color=color.new(col, 15), textcolor=color.black, size=size.small))
+        // The opposite side, faint: the counter-objective, and the reason a
+        // signal against the draw has to clear a higher bar to be worth taking.
+        altPx = dolDir == 1 ? dolBelowPx : dolAbovePx
+        altNm = dolDir == 1 ? dolBelowName : dolAboveName
+        if not na(altPx) and dolDir != 0
+            altCol = dolDir == 1 ? dolDnColor : dolUpColor
+            array.push(dolLineRefs, line.new(int(math.max(0, bar_index - 40)), altPx, bar_index + 12, altPx, color=color.new(altCol, 65), width=1, style=line.style_dashed))
+            array.push(dolLabelRefs, label.new(bar_index + 12, altPx, altNm, style=label.style_label_left, color=color.new(altCol, 60), textcolor=color.white, size=size.tiny))
+
 // ===== SMART ATR-BASED SL/TP =====
 // Distances scale with the instrument's own ATR, so no per-symbol boost is needed.
 getSmartATRSL() =>
@@ -1640,10 +2141,12 @@ drawFVGs() =>
     // entire 500-label budget and silently push the structure, zone, purge, CISD
     // and QM annotations off the chart. Cap the oldest away to keep headroom:
     // with every slider at maximum the tracked label total stays under 500.
-    // Phase 3 added the OTE/SD labels to that total, so the FVG share comes down
-    // by the same amount to keep the worst case where it was.
+    // Phase 3 added the OTE/SD labels to that total and Phase 4 added the pool,
+    // HTF-level, Asian range, DOL, True Day Open and named-event labels, so the
+    // FVG share comes down by the same amount. With every slider at maximum the
+    // tracked label total lands just under 500.
     capBoxes(fvgBoxRefs, 240)
-    capLabels(fvgLabelRefs, 110)
+    capLabels(fvgLabelRefs, 70)
     // The CE lines share the 500-line budget with SL/TP, structure, zone means
     // and the SD projections, so only the newest gaps keep theirs.
     capLines(fvgCELineRefs, 40)
@@ -1917,6 +2420,19 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
                 if not na(sd20) and sd20 < partialTpPrice2
                     partialTpPrice3 := sd20
 
+        // ── Draw on Liquidity as the final objective (Phase 4) ──
+        // The standard-deviation projection is the leg's own measured target; the
+        // draw is where the resting orders actually are. When the draw lies in the
+        // trade's direction and beyond the SD objective, it takes over the final
+        // target, because that is the level price is being delivered towards.
+        // Phase 5 folds this into the full TP1-3 cascade alongside the named
+        // model; here it only ever extends the last objective, never shortens it.
+        if showDOL and not na(dolPx) and dolDir == (isLong ? 1 : -1)
+            if isLong and dolPx > partialTpPrice3
+                partialTpPrice3 := dolPx
+            else if not isLong and dolPx < partialTpPrice3
+                partialTpPrice3 := dolPx
+
         posSize = calculatePositionSize(entryPrice, slPrice)
         
 
@@ -1963,13 +2479,16 @@ createRiskLevel(entryBar, price, isLong, fvg) =>
 // the newest match, so the stop could be placed on an unrelated zone.
 drawEntrySignals(bullishIndices, bearishIndices) =>
     sess = getCurrentSession()
-    sessShort = sess == "London/NY Overlap" ? "LN/NY" : sess == "London" ? "LDN" : sess == "New York" ? "NY" : sess == "Asian" ? "ASIA" : "OFF"
+    sessShort = inMacro ? "MACRO" : inSilverBullet ? "SB" : sess == "London/NY Overlap" ? "LN/NY" : sess == "NY AM KZ" ? "NYAM" : sess == "London KZ" ? "LDN" : sess == "London Close" ? "LNCL" : sess == "Asia KZ" ? "ASIA" : "OFF"
     pdTag = na(drEq) ? "" : close < drEq ? " | DISC" : " | PREM"
+    // The draw on liquidity is the objective the trade is actually being taken
+    // for, so it travels on the signal label rather than only on the dashboard.
+    dolTag = na(dolPx) ? "" : "\nDOL " + (dolDir == 1 ? "▲ " : "▼ ") + dolName
 
     if array.size(bullishIndices) > 0 and array.includes(bullishIndices, bar_index) and array.size(bullTriggerRef) > 0
         trigFVG = array.get(bullTriggerRef, 0)
         stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        labelText = "▲ BUY " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag
+        labelText = "▲ BUY " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
         labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.green, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(0, 180, 100), 10) : color.new(color.rgb(100, 160, 80), 20)
         label.new(bar_index, low - tapTol, labelText, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.normal)
         if riskManagement
@@ -1979,7 +2498,7 @@ drawEntrySignals(bullishIndices, bearishIndices) =>
     if array.size(bearishIndices) > 0 and array.includes(bearishIndices, bar_index) and array.size(bearTriggerRef) > 0
         trigFVG = array.get(bearTriggerRef, 0)
         stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        labelText = "▼ SELL " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag
+        labelText = "▼ SELL " + stars + "\n" + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
         labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.red, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(200, 50, 50), 10) : color.new(color.rgb(180, 80, 80), 20)
         label.new(bar_index, high + tapTol, labelText, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.normal)
         if riskManagement
@@ -2093,6 +2612,7 @@ updateStatusTable() =>
                 activeQM += 1
 
         sessionName = getCurrentSession()
+        windowName = getActiveWindow()
         
         // ── Theme Colors ──
         headerBG   = color.new(color.rgb(20, 20, 35), 0)
@@ -2106,7 +2626,7 @@ updateStatusTable() =>
         dimText    = color.rgb(160, 160, 180)
         brightText = color.white
         
-        var table dash = table.new(position.top_right, 2, 19, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        var table dash = table.new(position.top_right, 2, 25, bgcolor=headerBG, border_width=0, border_color=color.new(color.rgb(60, 60, 80), 0), frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
         
         // ── Row 0: Header ──
         tickerName = syminfo.ticker
@@ -2116,9 +2636,9 @@ updateStatusTable() =>
         table.cell(dash, 1, 0, marketStructure + trendIcon, text_color=brightText, bgcolor=trendColor, text_size=size.normal, text_halign=text.align_center)
         
         // ── Row 1: Session ──
-        sessColor = sessionName == "London/NY Overlap" ? accentGreen : sessionName == "London" ? accentBlue : sessionName == "New York" ? color.new(color.orange, 15) : sessionName == "Asian" ? accentPurple : color.new(color.gray, 40)
-        table.cell(dash, 0, 1, "Session", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
-        table.cell(dash, 1, 1, sessionName, text_color=brightText, bgcolor=sessColor, text_size=size.small, text_halign=text.align_center)
+        sessColor = inMacro ? accentGold : inSilverBullet ? color.new(color.rgb(200, 200, 220), 15) : sessionName == "NY AM KZ" ? color.new(color.orange, 15) : sessionName == "London KZ" ? accentBlue : sessionName == "London Close" ? accentPurple : sessionName == "Asia KZ" ? color.new(color.rgb(128, 0, 128), 25) : color.new(color.gray, 40)
+        table.cell(dash, 0, 1, "Killzone", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 1, windowName, text_color=inMacro ? color.black : brightText, bgcolor=sessColor, text_size=size.small, text_halign=text.align_center)
         
         // ── Row 2: Confluence Score ──
         scoreIcon = avgScore >= 70 ? "★★★" : avgScore >= 45 ? "★★" : "★"
@@ -2227,6 +2747,48 @@ updateStatusTable() =>
         oteColor = not oteValid ? color.new(color.gray, 50) : inOTE ? color.new(oteLineColor, 20) : valueBG
         table.cell(dash, 0, 18, "OTE / SD", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
         table.cell(dash, 1, 18, oteText + (inOTE ? " ◆IN" : ""), text_color=inOTE ? color.black : brightText, bgcolor=oteColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 19: Draw on Liquidity — the headline of the whole phase ──
+        // Where price is being delivered to, how far that is in ATR, and how
+        // confident the ranking is relative to the pool on the opposite side.
+        dolDist = na(dolPx) ? 0.0 : math.abs(dolPx - close) / math.max(volUnit, syminfo.mintick)
+        dolEdge = dolScore - math.max(dolAboveScore == dolScore ? dolBelowScore : dolAboveScore, 0.0)
+        dolText = na(dolPx) ? "No qualifying pool" : (dolDir == 1 ? "▲ " : "▼ ") + dolName + " " + str.tostring(dolPx, format.mintick) + " | " + str.tostring(dolDist, "#.#") + " ATR"
+        dolColor = na(dolPx) ? color.new(color.gray, 50) : dolDir == 1 ? color.new(dolUpColor, 20) : color.new(dolDnColor, 20)
+        table.cell(dash, 0, 19, "Draw on Liq", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 19, dolText, text_color=na(dolPx) ? brightText : color.black, bgcolor=dolColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 20: the runner-up pool, so the counter-objective is visible ──
+        altText = na(dolPx) ? "—" : (dolDir == 1 ? "▼ " + (dolBelowName == "" ? "none" : dolBelowName + " " + str.tostring(dolBelowPx, format.mintick)) : "▲ " + (dolAboveName == "" ? "none" : dolAboveName + " " + str.tostring(dolAbovePx, format.mintick))) + "  (edge " + str.tostring(dolEdge, "#") + ")"
+        table.cell(dash, 0, 20, "Counter Pool", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 20, altText, text_color=dimText, bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 21: Power of 3 and the True Day Open bias ──
+        po3Icon = po3Phase == "Distribution" ? "③" : po3Phase == "Manipulation" ? "②" : "①"
+        po3Text = po3Icon + " " + po3Phase + (po3Dir == 0 ? "" : po3Dir == 1 ? " ▲" : " ▼") + (na(po3ManipLevel) ? "" : " @" + str.tostring(po3ManipLevel, format.mintick)) + (na(trueDayOpen) ? "" : " | TDO " + (tdoBiasUp ? "▲" : "▼"))
+        po3Color = po3Phase == "Distribution" ? (po3Dir == 1 ? accentGreen : accentRed) : po3Phase == "Manipulation" ? accentGold : color.new(color.gray, 40)
+        table.cell(dash, 0, 21, "Power of 3", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 21, po3Text, text_color=po3Phase == "Manipulation" ? color.black : brightText, bgcolor=po3Color, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 22: SMT against the correlated instrument ──
+        smtAge = na(smtBar) ? "" : " (" + str.tostring(bar_index - smtBar) + "b)"
+        smtText = not smtAvailable ? "Unavailable" : smtDir == "None" ? "Aligned — no divergence" : smtDir + smtAge + " · " + smtNote
+        smtColor = not smtAvailable ? color.new(color.gray, 55) : smtDir == "Bullish" ? color.new(smtBullColor, 25) : smtDir == "Bearish" ? color.new(smtBearColor, 25) : color.new(valueBG, 5)
+        table.cell(dash, 0, 22, "SMT", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 22, smtText, text_color=(smtDir == "None" or not smtAvailable) ? brightText : color.black, bgcolor=smtColor, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 23: previous-period levels ──
+        htfText = (na(pdhRaw) ? "PDH —" : "PDH " + str.tostring(pdhRaw, format.mintick)) + " / " + (na(pdlRaw) ? "—" : str.tostring(pdlRaw, format.mintick))
+        table.cell(dash, 0, 23, "PD Levels", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 23, htfText, text_color=color.rgb(255, 190, 90), bgcolor=valueBG, text_size=size.small, text_halign=text.align_center)
+
+        // ── Row 24: Asian range, Judas and Turtle Soup in one narrative line ──
+        asiaTxt = na(asiaHigh) or na(asiaLow) ? "Asia —" : "Asia " + str.tostring(asiaHigh - asiaLow, format.mintick)
+        judasTxt = judasDir == "None" ? "" : " | Judas " + (judasDir == "Bullish" ? "▲" : "▼")
+        tsTxt = lastTSDir == "None" or na(lastTSBar) ? "" : " | TS " + (lastTSDir == "Bullish" ? "▲" : "▼") + str.tostring(bar_index - lastTSBar) + "b"
+        narrColor = judasDir != "None" ? color.new(judasColor, 30) : lastTSDir != "None" ? color.new(tsColor, 35) : valueBG
+        table.cell(dash, 0, 24, "Asia / Named", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
+        table.cell(dash, 1, 24, asiaTxt + judasTxt + tsTxt, text_color=brightText, bgcolor=narrColor, text_size=size.small, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELIVERY RUN TRACKER
@@ -2665,6 +3227,248 @@ if barstate.islast
         array.push(drLineRefs, line.new(drLeft, drLow, bar_index, drLow, color=color.new(discountZoneColor, 30), width=1))
         array.push(drLabelRefs, label.new(bar_index, drEq, "EQ " + str.tostring(drEq, format.mintick), style=label.style_label_left, color=color.new(equilibriumColor, 25), textcolor=color.black, size=size.tiny))
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 4 ENGINE — TURTLE SOUP, JUDAS, POWER OF 3, SMT, DRAW ON LIQUIDITY
+// ═══════════════════════════════════════════════════════════════════════════
+// Runs last in the engine because every one of these reads something produced
+// above it: the purge registry, the CISD and structure events, the dealing range
+// that decides premium from discount, and the killzone map from the top of the
+// file.
+
+// The true day rolls at New York midnight, so the day's narrative state rolls
+// with it rather than with the exchange session.
+if newNYDay
+    judasDone := false
+    judasDir := "None"
+    judasBar := na
+    judasLevel := na
+    po3Phase := "Accumulation"
+    po3Dir := 0
+    po3ManipLevel := na
+
+// ── Turtle Soup ──────────────────────────────────────────────────────────────
+// The original Turtle system bought N-period breakouts; the soup is the trade
+// against them. Price runs the extreme of the lookback window, closes back
+// inside on the same bar, and the reversal is then confirmed by CISD or by a
+// structure shift within the confirm window. Without that second leg it is only
+// a long wick, which is precisely the mistake the Phase 2 rewrite removed from
+// the sweep detector.
+tsHighWin = ta.highest(high, tsLookback)[1]
+tsLowWin = ta.lowest(low, tsLookback)[1]
+
+if canDetect and showTurtleSoup
+    // Stage 1 — the raid.
+    if not na(tsHighWin) and high > tsHighWin and close < tsHighWin
+        tsPendDir := -1
+        tsPendBar := bar_index
+        tsPendExtreme := high
+        tsPendLevel := tsHighWin
+    else if not na(tsLowWin) and low < tsLowWin and close > tsLowWin
+        tsPendDir := 1
+        tsPendBar := bar_index
+        tsPendExtreme := low
+        tsPendLevel := tsLowWin
+    // Stage 2 — confirmation, expiry, or invalidation. Evaluated on the raid bar
+    // too, because CISD frequently fires on the very candle that closes back
+    // inside the level.
+    if tsPendDir != 0
+        if bar_index - tsPendBar > tsConfirmBars
+            tsPendDir := 0
+        else
+            tsConfirmed = tsPendDir == 1 ? (bullCISD or bullBreakSwing or intBullBreak) : (bearCISD or bearBreakSwing or intBearBreak)
+            // Closing beyond the raided extreme means the level was genuinely
+            // broken rather than swept, and there is no soup.
+            tsVoided = tsPendDir == 1 ? close < tsPendExtreme : close > tsPendExtreme
+            if tsVoided
+                tsPendDir := 0
+            else if tsConfirmed
+                lastTSDir := tsPendDir == 1 ? "Bullish" : "Bearish"
+                lastTSBar := bar_index
+                lastTSStop := tsPendExtreme
+                if showTurtleSoup
+                    eventLabel(bar_index, tsPendDir == 1 ? low : high, "Turtle Soup " + (tsPendDir == 1 ? "▲" : "▼") + " " + str.tostring(tsPendLevel, format.mintick), tsColor, tsPendDir == 1)
+                tsPendDir := 0
+
+// ── Judas Swing ──────────────────────────────────────────────────────────────
+// The first sweep of the Asian range inside a killzone, reversed on the same
+// bar. It is the move engineered to position traders the wrong way before the
+// real expansion, so it is taken once per day and only the first one counts.
+if canDetect and showJudas and not judasDone and (inLondonKZ or inNYAMKZ) and not na(asiaHigh) and not na(asiaLow)
+    if high > asiaHigh and close < asiaHigh
+        judasDir := "Bearish"
+        judasBar := bar_index
+        judasLevel := high
+        judasDone := true
+        eventLabel(bar_index, high, "Judas ▼", judasColor, false)
+    else if low < asiaLow and close > asiaLow
+        judasDir := "Bullish"
+        judasBar := bar_index
+        judasLevel := low
+        judasDone := true
+        eventLabel(bar_index, low, "Judas ▲", judasColor, true)
+
+// ── Power of 3 (Accumulation / Manipulation / Distribution) ──────────────────
+// The day's story in three acts, anchored on the True Day Open rather than the
+// exchange session: price accumulates in a range, is manipulated through one
+// side of it to harvest the stops resting there, then distributes in the other
+// direction. The phase is what tells you whether a setup is early, on time, or
+// late — a distribution-phase entry is chasing, an accumulation-phase entry is
+// guessing, and the manipulation leg is where the engine wants to be filled.
+if canDetect and showPO3
+    if po3Phase == "Accumulation"
+        if judasDir != "None" and judasBar == bar_index
+            po3Phase := "Manipulation"
+            po3Dir := judasDir == "Bearish" ? -1 : 1
+            po3ManipLevel := judasLevel
+        else if inAnyKZ and purgeUpNow
+            po3Phase := "Manipulation"
+            po3Dir := 1
+            po3ManipLevel := nz(lastPurgeExtreme, low)
+        else if inAnyKZ and purgeDnNow
+            po3Phase := "Manipulation"
+            po3Dir := -1
+            po3ManipLevel := nz(lastPurgeExtreme, high)
+    else if po3Phase == "Manipulation"
+        // Distribution starts once delivery in the manipulated direction is
+        // confirmed *and* price has carried the True Day Open with it. Either
+        // one alone is a retracement.
+        po3Deliv = po3Dir == 1 ? (bullCISD or bullBreakSwing or intBullBreak) : (bearCISD or bearBreakSwing or intBearBreak)
+        po3PastOpen = na(trueDayOpen) or (po3Dir == 1 ? close > trueDayOpen : close < trueDayOpen)
+        if po3Deliv and po3PastOpen
+            po3Phase := "Distribution"
+
+// ── SMT Divergence ───────────────────────────────────────────────────────────
+// Correlated instruments deliver the same story. When one makes a higher high
+// and its partner fails to, the move is not supported and the high is a raid on
+// liquidity rather than an expansion. Any disagreement at a pair of highs reads
+// bearish and any disagreement at a pair of lows reads bullish, whichever side
+// failed: the divergence itself is the signal, and the note records who blinked.
+smtPH = ta.pivothigh(high, smtLen, smtLen)
+smtPL = ta.pivotlow(low, smtLen, smtLen)
+
+if canDetect and smtAvailable and not na(smtPH)
+    ourPHOld := ourPHNew
+    cmpPHOld := cmpPHNew
+    ourPHNew := smtPH
+    cmpPHNew := smtHAdj[smtLen]
+    if not na(ourPHOld) and not na(cmpPHOld) and not na(cmpPHNew)
+        ourHH = ourPHNew > ourPHOld
+        cmpHH = cmpPHNew > cmpPHOld
+        if ourHH != cmpHH
+            smtDir := "Bearish"
+            smtBar := bar_index
+            smtNote := ourHH ? "we HH / pair LH" : "we LH / pair HH"
+            if showSMT
+                eventLabel(bar_index - smtLen, smtPH, "SMT ▼", smtBearColor, false)
+        else
+            // SMT is a state at the most recent turn, not a permanent flag: a
+            // pivot pair that agrees clears it. Without this a divergence from
+            // fifty bars ago would veto every signal Phase 5 ever produced.
+            smtDir := "None"
+            smtNote := ""
+
+if canDetect and smtAvailable and not na(smtPL)
+    ourPLOld := ourPLNew
+    cmpPLOld := cmpPLNew
+    ourPLNew := smtPL
+    cmpPLNew := smtLAdj[smtLen]
+    if not na(ourPLOld) and not na(cmpPLOld) and not na(cmpPLNew)
+        ourLL = ourPLNew < ourPLOld
+        cmpLL = cmpPLNew < cmpPLOld
+        if ourLL != cmpLL
+            smtDir := "Bullish"
+            smtBar := bar_index
+            smtNote := ourLL ? "we LL / pair HL" : "we HL / pair LL"
+            if showSMT
+                eventLabel(bar_index - smtLen, smtPL, "SMT ▲", smtBullColor, true)
+        else
+            smtDir := "None"
+            smtNote := ""
+
+// ── Draw on Liquidity ────────────────────────────────────────────────────────
+// The ranking pass. Candidates are the whole unswept registry — every swing and
+// internal pivot, with equal-highs and equal-lows clusters weighted up by the
+// strength the registry already counted — plus the fixed reference levels the
+// entire market watches. The best pool on each side is kept, and the higher of
+// the two is the draw: the single level this engine believes price is being
+// delivered towards.
+if canDetect and showDOL
+    dolAboveScore := 0.0
+    dolAbovePx := na
+    dolAboveName := ""
+    dolBelowScore := 0.0
+    dolBelowPx := na
+    dolBelowName := ""
+
+    for lv in liqLevels
+        if not lv.swept and not lv.broken
+            isEQ = lv.strength >= eqMinStrength
+            lvW = isEQ ? 20.0 : lv.major ? 12.0 : 6.0
+            lvNm = isEQ ? (lv.isHigh ? "EQH" : "EQL") : lv.major ? (lv.isHigh ? "Swing High" : "Swing Low") : (lv.isHigh ? "Int High" : "Int Low")
+            lvSc = poolMagnetism(lv.price, lv.isHigh, lvW, bar_index - nz(lv.firstBar, lv.barIdx), lv.strength)
+            if lvSc > 0
+                if lv.isHigh and lv.price > close and lvSc > dolAboveScore
+                    dolAboveScore := lvSc
+                    dolAbovePx := lv.price
+                    dolAboveName := lvNm
+                else if not lv.isHigh and lv.price < close and lvSc > dolBelowScore
+                    dolBelowScore := lvSc
+                    dolBelowPx := lv.price
+                    dolBelowName := lvNm
+
+    // Fixed reference levels. Weighted by how much of the market is watching
+    // them: a previous month extreme is a far larger pool than yesterday's high.
+    array.clear(refPx)
+    array.clear(refNm)
+    array.clear(refW)
+    array.clear(refAge)
+    array.clear(refHigh)
+    if showPMHL
+        pushRef(pmhRaw, "PMH", 30.0, barsSinceMonth, true)
+        pushRef(pmlRaw, "PML", 30.0, barsSinceMonth, false)
+    if showPWHL
+        pushRef(pwhRaw, "PWH", 24.0, barsSinceWeek, true)
+        pushRef(pwlRaw, "PWL", 24.0, barsSinceWeek, false)
+    if showPDHL
+        pushRef(pdhRaw, "PDH", 18.0, barsSinceDay, true)
+        pushRef(pdlRaw, "PDL", 18.0, barsSinceDay, false)
+    pushRef(asiaHigh, "Asian High", 14.0, na(asiaEndBar) ? 0 : bar_index - asiaEndBar, true)
+    pushRef(asiaLow, "Asian Low", 14.0, na(asiaEndBar) ? 0 : bar_index - asiaEndBar, false)
+
+    nRef = array.size(refPx)
+    if nRef > 0
+        for i = 0 to nRef - 1
+            rPx = array.get(refPx, i)
+            rHi = array.get(refHigh, i)
+            // Reference levels are pools by construction, so they enter the
+            // cluster term at strength 2 rather than as a single order.
+            rSc = poolMagnetism(rPx, rHi, array.get(refW, i), array.get(refAge, i), 2)
+            if rSc > 0
+                if rHi and rSc > dolAboveScore
+                    dolAboveScore := rSc
+                    dolAbovePx := rPx
+                    dolAboveName := array.get(refNm, i)
+                else if not rHi and rSc > dolBelowScore
+                    dolBelowScore := rSc
+                    dolBelowPx := rPx
+                    dolBelowName := array.get(refNm, i)
+
+    if dolAboveScore > 0 and dolAboveScore >= dolBelowScore
+        dolPx := dolAbovePx
+        dolDir := 1
+        dolName := dolAboveName
+        dolScore := dolAboveScore
+    else if dolBelowScore > 0
+        dolPx := dolBelowPx
+        dolDir := -1
+        dolName := dolBelowName
+        dolScore := dolBelowScore
+    else
+        dolPx := na
+        dolDir := 0
+        dolName := "None"
+        dolScore := 0.0
+
 // ===== MAIN CODE EXECUTION =====
 
 // 1. Update daily loss counter
@@ -2673,7 +3477,7 @@ if shouldResetDaily
     dailyLoss := 0.0
     lastDayReset := dayofweek
 
-// 2. Gold Session Background
+// 2. Killzone / macro / Silver Bullet background shading
 sessionBG = (showSessions and showSessionBG) ? getSessionBGColor() : na
 bgcolor(sessionBG)
 
@@ -2773,6 +3577,12 @@ if barstate.islast
     drawCISD()
     drawQM()
     drawOTE()
+    // Phase 4: the liquidity map, the reference levels every desk watches, the
+    // Asian range, the True Day Open and the draw price is being delivered to.
+    drawLiqPools()
+    drawHTFLevels()
+    drawAsiaRange()
+    drawTimeAndDOL()
 
 // 10. Generate entry signals (confirmed bars only in non-repainting mode)
 [bullResultEntries, bearResultEntries] = generateEntrySignals()
@@ -2824,5 +3634,21 @@ if enableAlerts
     // Phase 5 folds this into the single consolidated JSON payload.
     if unicornFormed
         alert("Unicorn " + (unicornFormedDir == 1 ? "▲ Bullish" : "▼ Bearish") + " | Breaker + FVG | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    // Phase 4 named patterns. Each one carries the level it is measured from —
+    // the raided extreme for Turtle Soup, the swept Asian edge for Judas — so the
+    // alert is actionable on its own. Phase 5 consolidates all of these into one
+    // JSON payload.
+    if not na(lastTSBar) and lastTSBar == bar_index
+        alert("Turtle Soup " + lastTSDir + " | raid " + str.tostring(lastTSStop, format.mintick) + " | " + getActiveWindow() + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    if not na(judasBar) and judasBar == bar_index
+        alert("Judas Swing " + judasDir + " | Asian range swept @ " + str.tostring(judasLevel, format.mintick) + " | " + getActiveWindow() + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
+
+    // Guarded on the direction as well as the bar: a pivot high and a pivot low
+    // can confirm on the same candle, and the second one clearing the state
+    // would otherwise fire an alert announcing "SMT None".
+    if not na(smtBar) and smtBar == bar_index and smtDir != "None"
+        alert("SMT " + smtDir + " vs " + smtSymUsed + " | " + smtNote + " | " + syminfo.ticker + " " + timeframe.period, alert.freq_once_per_bar)
 
 
