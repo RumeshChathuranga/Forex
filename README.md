@@ -27,12 +27,6 @@ with the [Glossary](docs/GLOSSARY.md), which defines every term the engine uses.
 **Who it isn't for.** Anyone looking for a beginner's buy/sell arrow indicator. It fires rarely by
 design and every one of its ~170 inputs exists because something needed tuning.
 
----
-
-## Screenshot
-
-> _Add a chart screenshot to `docs/images/chart.png`, then replace this block with:_
-> `![Chart](docs/images/chart.png)`
 
 ---
 
