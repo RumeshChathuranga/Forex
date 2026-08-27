@@ -44,12 +44,55 @@ These decide what fires. Start here.
 | Input | Default | Range | What it does |
 |---|---|---|---|
 | Enable Sniper Engine | `on` | — | The primary signal path. Off leaves the map drawn but silent. |
-| **A+ Score Threshold** | `45` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. |
+| **A+ Score Threshold** | `50` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. |
 | Show Watch Markers | `on` | — | Tags every near-miss with its score. Keep these on — they are how you calibrate the threshold. |
-| Min Bars Between Signals | `10` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. |
-| Max Stop Distance (x ATR) | `2.0` | 0.5–10 | How far the stop may widen past the array edge to reach the setup's swing invalidation. Beyond this the array edge stands alone — a stop that far out is a different trade at a different size. |
-| Min Reward:Risk to Fire | `2.0` | 0.5–10 | Measured from the invalidation stop to the draw on liquidity. A setup that cannot pay this is refused however well it scores. |
-| Also Show Legacy FVG Confluence Signals | `off` | — | The simpler FVG-tap signal with its own confluence score. Fires far more often and on a much lower bar. |
+| Min Bars Between Signals | `6` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. Counted **per direction**, so a long never mutes a short. |
+| **Entry Confirm Window (bars)** | `5` | 1–15 | How long a setup stays armed waiting for its confirmation candle. See below. |
+| Max Stop Distance (x ATR) | `1.5` | 0.5–10 | The risk ceiling, and the engine's only anti-chase guard. A confirmation is accepted however far it closes from the array provided the stop it implies fits this budget. Also caps how far a purge wick or Quasimodo head may widen the stop. |
+| Min Reward:Risk to Fire | `1.8` | 0.5–10 | Measured from the invalidation stop to **the best liquidity pool lying in the trade's own direction**. A setup that cannot pay this is refused however well it scores. |
+
+### How an entry is triggered
+
+Price reaching a level and price turning at that level are two different events, usually several
+candles apart, and the engine treats them that way.
+
+1. **Arm.** Price trades into a live array's entry band — the far edge to its 50% mean threshold, so
+   the lower half of a demand zone or the upper half of a supply zone. The setup is recorded along
+   with the array's quality tier and the wick that reached into it. No gate is consulted here; arming
+   is only the observation that price got to the level.
+2. **Confirm.** Within *Entry Confirm Window* bars, any one of four things says price has turned: a
+   close that **reclaims the array's mean**, a **CISD**, a **structure break**, or a **displacement
+   leg** in the trade's direction. Arming and confirming on the same candle is allowed — a wick into
+   the level closing back through its mean is one candle doing both jobs.
+3. **Void.** A close beyond the array's far edge retires the setup immediately: that is the level
+   failing, which is the trade's real invalidation. Otherwise the window simply expires.
+
+The stop is measured from **the deepest wick the level survived while armed**, not from the array's
+edge and not from a blanket ATR multiple.
+
+The `Entries` row on the dashboard reports this lifecycle directly — `armed N → conf N · exp N ·
+void N`. A high `armed` with a near-zero `conf` means price keeps reaching your levels and never
+turning at them, which is a market condition, not a filter problem. A high `void` means the arrays
+themselves are failing.
+
+**B grade.** A+ is a full cascade pass and stays exactly that rare. A setup that confirmed at a live
+array with valid structure behind it and missed **exactly one** armed gate is still a trade — a smaller one
+— and is marked separately so a quiet chart stays informative. B markers are small, dim and never get
+a triangle; the tooltip names the gate that was missed. They are not tracked as trades and draw no
+SL/TP lines.
+
+| Input | Default | Range | What it does |
+|---|---|---|---|
+| Show B-Grade Setups | `on` | — | Off restores an A+-only chart. **Requires at least two armed gates to ever fire** — see below. |
+| B-Grade Score Threshold | `38` | 25–100 | Scored on the identical stack as A+ — the grade reflects the missing gate, never a softer measurement. |
+| B-Grade Min Reward:Risk | `1.5` | 0.5–10 | Measured the same way as the A+ figure. |
+
+> **B reads `0` with only one gate armed, and that is correct.** B means "missed exactly
+> one armed gate while structure still held". With *Require Valid Structure State* as the
+> only armed gate, missing one gate *is* missing structure — and structure is required at
+> every grade, because with no shift there is no reversal to trade. The two conditions are
+> mutually exclusive, so B is unreachable by construction. Arm a second gate and B starts
+> reporting. This is a real limit of the design, not a bug to wait out.
 
 **Tuning the threshold.** Do not guess. The dashboard Signal row shows `best NN vs NN` — the highest
 score the engine has ever reached against the bar it must clear. Set the threshold just under `best`.
@@ -70,7 +113,7 @@ State* is armed by default.
 | Require Correct Half of Dealing Range | `off` | Buy only in discount, sell only in premium |
 | Require Active Killzone | `off` | Price is inside a killzone. **Stands down above intraday** — a daily bar is stamped at its session open and matches no window. |
 | **Require Valid Structure State** | **`on`** | Post-CISD, post-MSS/CHoCH, or a BOS continuation in the trade's direction |
-| Structure Valid For (bars) | `15` (1–100) | How recently that shift must have happened |
+| Structure Valid For (bars) | `20` (1–100) | How recently that shift must have happened |
 | Require Liquidity Taken | `off` | A purge, Turtle Soup raid or Judas swing in the trade's direction |
 | Liquidity Taken Within (bars) | `20` (1–100) | How recently |
 | Reject Opposing SMT | `off` | No SMT divergence pointing against the trade |
@@ -103,6 +146,7 @@ is, never whether it is valid. All range 0–50.
 | DOL Room & Alignment | `10` | Draw points the trade's way, with room |
 | Zone Freshness | `8` | Untouched array |
 | Volume | `8` | Volume above its 20-period average |
+| Power of 3 Phase | `8` | Manipulation-phase entries — stops harvested, reversal pending — score full. Distribution is a chase, accumulation is a guess. |
 
 The score is `sum of applicable weights earned ÷ sum of applicable weights × 100`. A factor that
 **cannot apply** — the OTE band when the leg points the other way, SMT when no partner resolves —
@@ -119,16 +163,13 @@ The ATR multipliers everything else is measured in.
 | ATR Period | `14` | 5–50 | The volatility unit itself. Lower reacts faster; higher is steadier. |
 | Min FVG Size (x ATR) | `0.10` | 0.01–2.0 | Gaps smaller than this fraction of ATR are noise. Raise to `0.15–0.25` on noisy instruments. |
 | Zone Tap Tolerance (x ATR) | `0.15` | 0.0–1.0 | How far outside an array price may trade and still count as a valid tap. |
-| FVG Mitigation Depth | `0.50` | 0.0–1.0 | How much of a gap must fill to retire it. `0.5` = consequent encroachment, the ICT standard. `1.0` = full fill. |
+| FVG Mitigation Depth | `0.50` | 0.0–1.0 | How much of a gap must fill before it is marked used. `0.5` = consequent encroachment, the ICT standard. `1.0` = full fill. This affects freshness scoring and drawing only — **the entry engine keeps a gap eligible until its far edge is closed through**, because retiring an array at the depth the entry needs price to reach would destroy it with the very move that qualified it. |
 | Maximum FVG Age (bars) | `150` | ≥1 | Gaps older than this are dropped. |
 | **Max Tracked FVGs (per side)** | `120` | 20–300 | The working set walked every bar. See [Counts and caps](#counts-and-caps). |
 | Show Mitigated FVGs | `off` | — | Keeps filled gaps visible. |
 | Extend FVG Zones | `on` | — | Stretches gap boxes to the current bar. |
 | Multi-Timeframe Analysis | `on` | — | Detects gaps on the higher timeframe too. |
 | **Higher Timeframe** | `60` | 60/240/D/W | **Must be above your chart timeframe**, or HTF gaps are tagged with the chart's own timeframe and the intermediate-array gate can never pass. |
-| Show Entry Signals | `on` | — | Master switch for signal drawing. |
-| Entry Strategy | `Sharp Turn + Confirmation` | — | Legacy path only: whether a tap alone triggers, or a tap plus a confirming close. |
-| Only Show Trend-Aligned Signals | `on` | — | Legacy path only. |
 | **Non-Repainting Mode** | `on` | — | Evaluate only on confirmed closes. Turning it off lets everything move intrabar — a preview convenience, not a trading mode. |
 
 ---
@@ -139,7 +180,7 @@ The ATR multipliers everything else is measured in.
 
 | Input | Default | Range | Notes |
 |---|---|---|---|
-| Swing Pivot Length | `20` | 3–50 | Drives the primary trend and dealing range. Higher = fewer, more significant swings, but a longer confirmation lag. |
+| Swing Pivot Length | `12` | 3–50 | Drives the primary trend and dealing range. Higher = fewer, more significant swings, but the confirmation lag is paid on **both** sides: `20` on a 5-minute chart puts major structure over three hours behind price, far too late for the structure gate's validity window. |
 | Internal Pivot Length | `5` | 2–20 | Faster shifts for entry timing. |
 | Show Swing Pivots (H/L) | `on` | — | |
 | Show Swing BOS / CHoCH / MSS | `on` | — | |
@@ -196,8 +237,7 @@ The ATR multipliers everything else is measured in.
 | Min Volume Imbalance (x ATR) | `0.10` (0.01–1) | |
 | Opening Gaps (NDOG / NWOG) | `on` | Reference levels, never retired by touches |
 | Min Opening Gap (x ATR) | `0.02` (0–1) | |
-| Show FVG Consequent Encroachment | `on` | The 50% line of every live gap |
-| **Require CE Tap for Entry** | `on` | Entry triggers only once price reaches the gap's 50% line. Fewer signals, materially better fills. Pair with a Mitigation Depth of 0.5 or deeper. |
+| Show FVG Consequent Encroachment | `on` | The 50% line of every live gap. This is the level the entry engine arms on and the level its confirmation has to reclaim. |
 
 ### CISD · Purges · Quasimodo
 
@@ -283,35 +323,27 @@ calendar.
 
 ## 5. Risk Management
 
-Applies to the SL/TP lines drawn with each signal.
+This is an indicator. It cannot hold a position, size one, or enforce a daily loss cap, and it no
+longer offers inputs implying otherwise. What is left is the level set drawn against a fired signal.
 
 | Input | Default | Range | Notes |
 |---|---|---|---|
-| Show Risk Management Levels | `on` | — | |
-| Risk:Reward Ratio | `2.0` | ≥0.5 | Fallback target when SD projections do not apply |
-| Stop Loss Padding (x ATR) | `0.25` | 0–2 | Buffer beyond the array edge |
-| Use Trailing Stop | `off` | — | |
-| Trail Trigger (%) | `50` | 10–90 | % of TP reached before trailing activates |
-| Show Partial TP Levels | `off` | — | |
-| Partial TP (%) | `50` | 10–90 | |
-| Use Breakeven Stop | `on` | — | |
-| Breakeven Trigger (%) | `30` | 10–90 | % of TP reached before SL moves to entry |
-| Max Daily Loss (%) | `5.0` | 0.5–20 | |
-| Volatility-Based Position Sizing | `on` | — | Scales size inversely with the ATR/average-ATR ratio |
-| Time-Based Exit | `off` | — | |
-| Max Trade Duration (hours) | `24` | 1–168 | |
-| Max Concurrent Positions | `3` | 1–10 | New signals are suppressed while this many are open |
+| Show Risk Management Levels | `on` | — | Draws SL, TP1, TP2 and the final objective against each signal |
+| Stop Loss Padding (x ATR) | `0.25` | 0–2 | Buffer beyond the setup's invalidation wick |
 | **Max Tracked Trades** | `12` | 2–40 | Drawing budget — see below |
-| Risk Per Trade (%) | `1.0` | 0.1–5.0 | |
 
-**Smart ATR SL/TP** — an alternative stop model for the legacy path only. The sniper engine always
-derives its stop from the setup's own invalidation.
+**How the levels are derived.**
 
-| Input | Default | Range |
-|---|---|---|
-| Use Smart ATR SL/TP | `on` | — |
-| ATR SL Multiplier | `1.5` | 0.5–5.0 |
-| ATR TP Multiplier | `3.0` | 1.0–10.0 |
+- **Stop** — the deepest wick the array survived while the setup was armed, padded. Widened to a
+  model's own swing invalidation (the Turtle Soup raid extreme, the Judas level, the Quasimodo head,
+  or the purge wick on a full ICT 2022 sequence) only when *that model* is what named the setup, and
+  never past *Max Stop Distance*.
+- **TP1 / TP2** — the current impulse leg's 0.5 and 1.0 standard-deviation projections when the leg
+  runs the trade's way; 1R and 2R when it does not.
+- **Final objective** — the best liquidity pool lying in the trade's own direction, whether or not
+  it won the draw-on-liquidity ranking. This is also what *Min Reward:Risk to Fire* is measured to.
+  When that pool sits nearer than TP1 or TP2, those are compressed inside it rather than left beyond
+  a level the trade will never reach.
 
 ---
 
@@ -337,7 +369,7 @@ Structure Drawings* and *Max Zones Drawn* to their maximums at the same time can
 oldest drawings are simply dropped, which is the intended degradation rather than an error.
 
 The budget is allocated with **signal output taking priority** — the engine retains 60 signal flags
-and 15 watch markers, and FVG score tags are the first thing sacrificed when labels get tight.
+and 15 watch markers, and the HTF gap tags are the first thing sacrificed when labels get tight.
 
 ---
 
@@ -345,25 +377,18 @@ and 15 watch markers, and FVG score tags are the first thing sacrificed when lab
 
 | Input | Default | Notes |
 |---|---|---|
-| Show Status Table | `on` | The five-row dashboard |
+| Show Status Table | `on` | The dashboard — five rows, or eight with diagnostics on |
+| **Show Gate Diagnostics** | `on` | Adds three rows. **Gates** — how many bars each armed gate has rejected across the loaded history, plus which gates are armed. **Entries** — the armed-setup lifecycle (`armed → conf · exp · void`), which says what became of every level price actually reached. **Rejects** — what happened to setups that confirmed and cleared every gate and still did not fire (`score` / `RR` / `cool` / `stop`, and the B-grade count). Read them in that order. A gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm, and no threshold tuning substitutes for that. |
 | **Redraw Every Tick** | `off` | Off rebuilds drawings twice per bar — once on open, once on close. On rebuilds on every tick, which is the dominant cost in real time. Only needed with Non-Repainting Mode off. |
 | Enable Alerts | `on` | Master switch |
 
-### Confluence Scoring
-
-Used by the **legacy** FVG signal path only. If *Also Show Legacy FVG Signals* is off, none of this
-affects anything.
-
-| Input | Default | Range |
-|---|---|---|
-| Minimum Confluence Score | `40` | 0–100 |
-| Show Score Labels on FVGs | `on` | — |
-| Color-Code FVGs by Score | `on` | — |
-| Weight: Trend / RSI / Volume / Variant / Session / Volatility | `25` / `15` / `15` / `20` / `15` / `10` | 0–100 each |
-
 ### Colours
 
-Every drawn object has a colour input, grouped under **Colors** — FVGs and their variants, score
-tiers, risk lines, structure events, sessions and killzones, each zone kind, each PD array, the
-liquidity pools, HTF levels, DOL, named patterns and the sniper signals. All are cosmetic; none
-affect detection.
+Every drawn object has a colour input, grouped under **Colors** — FVGs and their variants, risk
+lines, structure events, sessions and killzones, each zone kind, each PD array, the liquidity pools,
+HTF levels, DOL, named patterns and the sniper signals. All are cosmetic; none affect detection.
+
+FVG boxes are coloured by **variant** — Perfect, Breakaway, Rejection — and a gap the intermediate
+timeframe also left gets a heavier border. There is no separate confluence score: the sniper stack
+is the only scorer in the script, and a second scoring model that disagreed with it was worse than
+no second model at all.

@@ -53,7 +53,7 @@ Apply to all four before the per-instrument deltas.
 | Redraw Every Tick | `off` | Rebuilds twice a bar instead of hundreds of times |
 | **Require Valid Structure State** | `on` | The only gate armed to begin with — a reversal with no structure shift is not a setup |
 | All other Hard Gates | `off` | Arm them one at a time, later, checking the tally after each |
-| A+ Score Threshold | `45` | A starting bar, not a target — you will change this |
+| A+ Score Threshold | `50` | A starting bar, not a target — you will change this |
 | Max Tracked FVGs | `100` | Slightly leaner than default; keeps the chart responsive |
 | Show Watch Markers | `on` | These are how you calibrate. Leave them on until tuning is done. |
 
@@ -66,7 +66,7 @@ reliable inverse partner in DXY.
 
 | Setting | Value | Default | Reasoning |
 |---|---|---|---|
-| Swing Pivot Length | `15` | 20 | 20 bars either side on 5m is 100 minutes of confirmation lag *each way*. `15` keeps swings meaningful while cutting a third of the lag on a fast instrument. |
+| Swing Pivot Length | `10` | 12 | The confirmation lag is paid on both sides of the pivot, so even the `12` default is an hour of delay on 5m gold. `10` keeps swings meaningful on a fast instrument while staying inside the structure gate's validity window. |
 | Internal Pivot Length | `5` | 5 | Unchanged |
 | Higher Timeframe | `60` | 60 | 12× the chart — a genuine intermediate term |
 | HTF Bias Timeframe | `240` | 240 | Unchanged |

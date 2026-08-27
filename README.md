@@ -1,4 +1,4 @@
-# Advanced RC Indicator v3.4 — ICT Sniper
+# Advanced RC Indicator v4.0 — ICT Sniper
 
 [![Pine Script](https://img.shields.io/badge/Pine%20Script-v6-2962FF)](https://www.tradingview.com/pine-script-docs/)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen)](LICENSE)
@@ -42,6 +42,7 @@ something needed tuning.
 | **Draw on Liquidity** | Ranks every unswept pool by magnetism and names the one price is being delivered towards |
 | **Time** | DST-correct killzones, 20-minute ICT macros, Silver Bullet windows, True Day Open, Judas swing, Power of 3 |
 | **Correlation** | SMT divergence against an auto-selected partner (XAU↔DXY, EURUSD↔GBPUSD, NQ↔SPX, BTC↔ETH) |
+| **Entry engine** | Arm when price reaches an array's entry band, confirm when it turns there — CE reclaim, CISD, structure break or displacement — void when the array fails |
 | **Signal engine** | Nine-gate cascade → weighted stack score → named model, invalidation-based stop, SD/DOL targets |
 
 Every threshold is expressed as a **multiple of ATR**, never in points or pips, so the same defaults
@@ -69,7 +70,7 @@ Four settings matter on day one. Leave the rest alone until you have read
 
 | Setting | Group | Start at | Why |
 |---|---|---|---|
-| **A+ Score Threshold** | Sniper Engine | `45` | The single dial controlling signal frequency. Tune it from the dashboard — see below. |
+| **A+ Score Threshold** | Sniper Engine | `50` | The single dial controlling signal frequency. Tune it from the dashboard — see below. |
 | **Sniper Hard Gates** | Sniper Hard Gates | only *Require Valid Structure State* armed | Arming more tightens the engine. Arming all of them will silence it — see the [deadlock warning](docs/TUNING.md#the-gate-deadlock-trap). |
 | **Higher Timeframe** | top of the list | one step above your chart | Must actually be *higher* than the chart, or the intermediate-array gate can never pass. |
 | **Redraw Every Tick** | Display Settings | `off` | Off rebuilds the chart twice a bar instead of hundreds of times. Leave it off unless you need intrabar zones. |
@@ -100,7 +101,7 @@ Four settings matter on day one. Leave the rest alone until you have read
 
 ## The dashboard
 
-Five rows, top right. The last one is the important one.
+Seven rows, top right. The last three are the important ones.
 
 | Row | Shows |
 |---|---|
@@ -108,19 +109,39 @@ Five rows, top right. The last one is the important one.
 | **Killzone** | The most precise live window — macro beats Silver Bullet beats killzone |
 | **Range** | Premium (sell side) or discount (buy side) |
 | **Draw on Liq** | The magnetic target, its price, and distance in ATR |
-| **Signal** | The engine's verdict — **and its tally** |
+| **Signal** | The engine's verdict for **this candle** — and its running tally |
+| **Gates** | What every armed gate has rejected across the **whole chart**, and which gates are armed |
+| **Entries** | The armed-setup lifecycle — what became of every level price actually reached |
+| **Rejects** | What happened to setups that confirmed, cleared every gate and still did not fire |
 
 The Signal row reads one of:
 
 ```
 ▲ BUY  ICT 2022 Model  74  ·  3.1R          ← fired on this bar
 ▲ watch Unicorn  68/52  ·  158 fired / 731 setups · best 78 vs 52
-blocked: ▲Structure ▼No tap  ·  last ▼132b  ·  158 fired / 731 setups · best 78 vs 52
+blocked: ▲Structure ▼No entry ·  last ▼132b  ·  158 fired / 731 setups · best 78 vs 52
 ```
 
 **`best 78 vs 52`** is your tuning instrument: the highest score the engine has ever reached, next to
-the threshold it must clear. If `best` is below your threshold, nothing can fire. Set the threshold
-just under it. Full recipes in [TUNING.md](docs/TUNING.md).
+the threshold it must clear. If `best` is below your threshold, nothing can fire.
+
+But **read the Gates row before you touch the threshold.** The Signal row can only name the *first*
+gate that failed on the current candle, which means a gate sitting downstream of a permanently-
+failing one never gets to report itself — that is how a deadlocked pair hides. The Gates row counts
+every armed gate over the whole loaded history and makes the real blocker obvious:
+
+```
+Gates    Struct 5969  ·  Entry 402
+Entries  armed 1204 → conf 388 · exp 690 · void 126
+Rejects  score 341 · RR 12 · cool 412 · stop 0  |  B 0
+```
+
+Every armed gate is listed with what it has rejected, in cascade order, so the row
+doubles as the list of which gates are armed at all.
+
+A gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm.
+A vetoed setup is never scored at all, so no threshold change can rescue it. Full recipes in
+[TUNING.md](docs/TUNING.md).
 
 ---
 
