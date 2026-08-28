@@ -7,7 +7,7 @@
 // max_bars_back is set explicitly because the zone engine walks back to the
 // origin candle of an impulse leg using a series offset (close[off]), and Pine
 // cannot infer the required history buffer for dynamic offsets on its own.
-indicator("Advanced RC Indicator v3.4 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
+indicator("Advanced RC Indicator v4.1 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
 
 
 
@@ -36,14 +36,11 @@ mtfAnalysis = input.bool(true, "Multi-Timeframe Analysis")
 higherTF = input.string("60", "Higher Timeframe", options=["60", "240", "D", "W"])
 
 // Entry Signals
-showEntrySignals = input.bool(true, "Show Entry Signals")
-entryStrategy = input.string("Sharp Turn + Confirmation", "Entry Strategy", options=["Sharp Turn", "Sharp Turn + Confirmation"])
-respectTrend = input.bool(true, "Only Show Trend-Aligned Signals", tooltip="When enabled, only shows buy signals in uptrends and sell signals in downtrends")
 nonRepaintMode = input.bool(true, "Non-Repainting Mode", tooltip="Evaluate detection and signals only on confirmed bar closes. Signals never appear and then vanish, and alerts fire once per closed bar.")
 
 // ===== ICT MARKET STRUCTURE SETTINGS =====
 structureSection = "Market Structure (ICT)"
-swingLen = input.int(20, "Swing Pivot Length", minval=3, maxval=50, group=structureSection, tooltip="Bars either side required to confirm a major swing pivot. Drives the primary trend and the dealing range.")
+swingLen = input.int(12, "Swing Pivot Length", minval=3, maxval=50, group=structureSection, tooltip="Bars either side required to confirm a major swing pivot. Drives the primary trend and the dealing range. Every increase costs the same number of bars in confirmation lag on both sides, so on a 5-minute chart 20 puts major structure over three hours behind price — far too late to satisfy the structure gate's validity window.")
 internalLen = input.int(5, "Internal Pivot Length", minval=2, maxval=20, group=structureSection, tooltip="Faster pivots used for internal structure shifts and entry timing.")
 showMarketStructure = input.bool(true, "Show Swing Pivots (H/L)", group=structureSection)
 showSwingStructure = input.bool(true, "Show Swing BOS / CHoCH / MSS", group=structureSection)
@@ -56,43 +53,32 @@ maxStructDrawings = input.int(30, "Max Structure Drawings", minval=5, maxval=120
 drSection = "Dealing Range (Premium / Discount)"
 showDealingRange = input.bool(true, "Show Dealing Range", group=drSection)
 showPDZones = input.bool(true, "Shade Premium / Discount Zones", group=drSection)
+// Built from chart-timeframe swing pivots, the "dealing range" is whatever the
+// chart's own last two pivots happen to span — 36 minutes on a 3-minute chart at
+// the default pivot length, an hour on a 5-minute one. The two then report
+// opposite halves for the same instrument at the same moment, and each feeds a
+// 12-point weight and an optional veto off that contradiction. Premium and
+// discount are a higher-timeframe idea; anchoring them to one fixes it.
+drSource = input.string("HTF Range", "Dealing Range Source", options=["HTF Range", "Chart Swings", "Session Range"], group=drSection, tooltip="HTF Range reads a fixed higher-timeframe high/low so every chart timeframe resolves the same range. Chart Swings is the legacy behaviour and is timeframe-dependent by construction. Session Range uses the current day's high and low.")
+drTF = input.string("60", "Dealing Range Timeframe", options=["15", "60", "240", "D"], group=drSection, tooltip="Only used by the HTF Range source. Should sit well above your chart: 60 for a 3-5 minute chart, 240 for 15m-1h.")
+drLen = input.int(20, "Dealing Range Length (bars)", minval=5, maxval=100, group=drSection, tooltip="How many bars of the dealing-range timeframe define the range. 20 bars of 1H is a little under a trading day.")
 
-// Enhanced Risk Management Settings
+// ===== RISK MANAGEMENT (DRAWN LEVELS) =====
+// An indicator cannot hold a position, size it, or enforce a daily loss cap, so
+// nothing here pretends to. What is left is the SL/TP line set drawn against a
+// fired signal, and the drawing budget that keeps it from crowding the chart.
 riskSection = "Risk Management Settings"
 riskManagement = input.bool(true, "Show Risk Management Levels", group=riskSection)
-riskReward = input.float(2.0, "Risk:Reward Ratio", minval=0.5, step=0.5, tooltip="Target will be set at this multiple of the risk", group=riskSection)
-slPaddingATR = input.float(0.25, "Stop Loss Padding (x ATR)", minval=0.0, maxval=2.0, step=0.05, tooltip="Buffer beyond the zone edge when Smart ATR SL/TP is off, in ATR multiples so it adapts to any instrument", group=riskSection)
-trailingStop = input.bool(false, "Use Trailing Stop", group=riskSection)
-trailTriggerPercent = input.float(50, "Trail Trigger (%)", minval=10, maxval=90, step=5, tooltip="% of TP reached to activate trailing stop", group=riskSection)
-showPartialTP = input.bool(false, "Show Partial TP Levels", group=riskSection)
-partialTPPercent = input.float(50, "Partial TP (%)", minval=10, maxval=90, step=5, tooltip="% of total TP distance for partial", group=riskSection)
-
-// New Risk Management Features
-breakevenStop = input.bool(true, "Use Breakeven Stop", group=riskSection)
-breakevenTrigger = input.float(30, "Breakeven Trigger (%)", minval=10, maxval=90, step=5, tooltip="% of TP reached to move SL to breakeven", group=riskSection)
-maxDailyLoss = input.float(5.0, "Max Daily Loss (%)", minval=0.5, maxval=20, step=0.5, tooltip="Maximum allowed loss per day as % of account", group=riskSection)
-useVolatilityBasedSizing = input.bool(true, "Volatility-Based Position Sizing", group=riskSection)
-timeBasedExit = input.bool(false, "Time-Based Exit", group=riskSection)
-maxTradeHours = input.int(24, "Max Trade Duration (hours)", minval=1, maxval=168, tooltip="Maximum hours to hold a position", group=riskSection)
-
-// New Risk Management Additions
-maxConcurrentPositions = input.int(3, "Max Concurrent Positions", minval=1, maxval=10, group=riskSection)
+slPaddingATR = input.float(0.25, "Stop Loss Padding (x ATR)", minval=0.0, maxval=2.0, step=0.05, tooltip="Buffer beyond the setup's invalidation wick, in ATR multiples so it adapts to any instrument", group=riskSection)
+// The padding alone is not a stop. When the confirmation candle closes near the
+// array edge — the normal case, and the one the reclaim test deliberately
+// selects for — the entire distance from entry to invalidation is barely more
+// than this buffer: a quarter of one ATR on gold, where a single 5-minute wick
+// routinely runs half of one. Those trades are not stopped out by the setup
+// failing, they are stopped out by noise, and a stop that tight also inflates
+// the reward:risk it is measured against, so they pass a test they should not.
+minStopATR = input.float(0.75, "Min Stop Distance (x ATR)", minval=0.1, maxval=3.0, step=0.05, group=riskSection, tooltip="A floor on how close the stop may sit to the entry, whatever the setup's own invalidation says. It only ever widens a stop, never tightens one past the level that would prove the trade wrong. Raise it if the Result row shows a high stop-out rate; lower it only if the reward:risk test starts refusing setups you would have taken.")
 maxTrackedTrades = input.int(12, "Max Tracked Trades (drawing budget)", minval=2, maxval=40, group=riskSection, tooltip="Each tracked trade owns five lines. This caps how many can exist at once so a burst of signals can never crowd the 500-line budget the zones and structure annotations share.")
-riskPerTrade = input.float(1.0, "Risk Per Trade (%)", minval=0.1, maxval=5.0, group=riskSection)
-
-// ===== CONFLUENCE SCORING SETTINGS =====
-confluenceSection = "Confluence Scoring"
-minConfluenceScore = input.float(40.0, "Minimum Confluence Score (0-100)", minval=0, maxval=100, step=5, group=confluenceSection, tooltip="Signals below this score are filtered out")
-showScoreLabels = input.bool(true, "Show Score Labels on FVGs", group=confluenceSection)
-scoreColorMode = input.bool(true, "Color-Code FVGs by Score", group=confluenceSection, tooltip="Override FVG colors with score-based gradient")
-
-// Scoring Weights (sum to 100)
-weightTrend = input.float(25.0, "Weight: Trend Alignment", minval=0, maxval=100, step=5, group=confluenceSection)
-weightRSI = input.float(15.0, "Weight: RSI", minval=0, maxval=100, step=5, group=confluenceSection)
-weightVolume = input.float(15.0, "Weight: Volume", minval=0, maxval=100, step=5, group=confluenceSection)
-weightVariant = input.float(20.0, "Weight: FVG Variant", minval=0, maxval=100, step=5, group=confluenceSection)
-weightSession = input.float(15.0, "Weight: Session Timing", minval=0, maxval=100, step=5, group=confluenceSection)
-weightVolatility = input.float(10.0, "Weight: Volatility", minval=0, maxval=100, step=5, group=confluenceSection)
 
 // ===== SESSIONS, KILLZONES & TIME =====
 // Windows are session strings evaluated in a named timezone rather than fixed
@@ -137,12 +123,45 @@ dolBiasWeight = input.float(12.0, "Directional Bias Weight", minval=0.0, maxval=
 // a weighted stack score on what survived.
 sniperSection = "Sniper Engine (A+ Setups)"
 enableSniper = input.bool(true, "Enable Sniper Engine", group=sniperSection, tooltip="The primary signal path. Fires rarely by design: every gate below must pass before a setup is even scored.")
-aPlusThreshold = input.float(45.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every gate but score below this are drawn as watch markers instead of signals. Tune it from what you see: the number on each watch marker is that setup score, so if the best markers on your chart read 55 then 75 can never fire and 50 fires on the best few. A conflicted market genuinely tops out in the 50s.")
+aPlusThreshold = input.float(50.0, "A+ Score Threshold", minval=40.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="Setups that clear every gate but score below this are drawn as watch markers instead of signals. Tune it from what you see: the number on each watch marker is that setup score, so if the best markers on your chart read 55 then 75 can never fire and 50 fires on the best few. A conflicted market genuinely tops out in the 50s.")
 showWatchMarker = input.bool(true, "Show Watch Markers", group=sniperSection, tooltip="A small tag where every gate passed but the stack score fell short. Useful for seeing how close the engine came, and why.")
-sniperCooldown = input.int(10, "Min Bars Between Signals", minval=0, maxval=200, group=sniperSection, tooltip="Stops one setup being re-signalled on every bar price spends inside the same array.")
-maxStopATR = input.float(2.0, "Max Stop Distance (x ATR)", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="How far the stop may be widened past the array edge to reach the setup's swing invalidation — a purge wick or a Quasimodo head. Beyond this the array edge stands on its own, because a stop that far out is a different trade at a different size and its reward:risk will never qualify.")
-minSignalRR = input.float(2.0, "Min Reward:Risk to Fire", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="Measured from the invalidation-based stop to the draw on liquidity. A setup that cannot pay this is not taken however well it scores.")
-showLegacySignals = input.bool(false, "Also Show Legacy FVG Confluence Signals", group=sniperSection, tooltip="The simple FVG-tap signal with its confluence score. Off by default: it fires far more often, and on a much lower bar, than the sniper cascade.")
+sniperCooldown = input.int(6, "Min Bars Between Signals", minval=0, maxval=200, group=sniperSection, tooltip="Stops one setup being re-signalled on every bar price spends inside the same array. Counted per direction, so a long never mutes a short.")
+// The entry is a sequence, not a candle. Price reaching the array and price
+// telling you it has turned are two separate events, and collapsing them onto
+// one bar is what silenced the engine: it demanded the tap, a reacting close and
+// a close still inside the array all at once, which rejected the displacement
+// candle that is the actual confirmation. Arming records the first event and
+// waits for the second.
+armWindow = input.int(5, "Entry Confirm Window (bars)", minval=1, maxval=15, group=sniperSection, tooltip="Once price reaches a live array's entry band the setup is armed. It stays armed for this many bars waiting for a confirmation candle — a reclaim of the array's 50% mean, a CISD, a structure break or a displacement leg. Expiry is not a rejection: it means price sat at the level and never turned.")
+// ── B grade ────────────────────────────────────────────────────────────────
+// A+ is a full cascade pass and stays exactly as rare as it was. A setup that
+// tapped a live array with structure behind it and failed one single gate is
+// still a trade — just a smaller one — and showing it is what keeps a quiet
+// chart informative instead of blank.
+enableBTier = input.bool(true, "Show B-Grade Setups", group=sniperSection, tooltip="Setups that tapped a live array with valid structure but missed exactly one armed gate. Drawn small and dim so they can never be confused with an A+ triangle; the tooltip names the gate that failed.")
+// 38 was calibrated against the old stack, whose floor sat near 50 — a setup
+// with no supporting evidence at all could not score below it, so the number was
+// safely under everything. After the floors were recalibrated the same "nothing
+// going for it" setup scores in the high 20s to high 30s, which put this
+// threshold *at* the noise floor and filled the chart with B markers reading 42
+// and 45: the engine drawing its own baseline back at you. The A+ threshold was
+// corrected for the new scale; this one was not.
+bTierThreshold = input.float(55.0, "B-Grade Score Threshold", minval=25.0, maxval=100.0, step=1.0, group=sniperSection, tooltip="B markers are context, not signals — but a marker at the score floor is not even context. Read the watch markers on a flat stretch to find where the floor sits in your market and keep this well above it. Set it to 100 to switch B grade off entirely without losing the count on the Rejects row.")
+bTierMinRR = input.float(1.5, "B-Grade Min Reward:Risk", minval=0.5, maxval=10.0, step=0.25, group=sniperSection)
+maxStopATR = input.float(1.5, "Max Stop Distance (x ATR)", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="The risk ceiling, and the only anti-chase guard the engine needs. A confirmation candle is accepted however far it closes from the array, provided the stop it implies is still inside this budget — which is what lets a displacement close count as the entry it actually is. It also caps how far a purge wick or a Quasimodo head may widen the stop past the setup's own invalidation.")
+minSignalRR = input.float(1.8, "Min Reward:Risk to Fire", minval=0.5, maxval=10.0, step=0.25, group=sniperSection, tooltip="Measured from the invalidation-based stop to the first liquidity pool lying in the trade's own direction. A setup that cannot pay this is not taken however well it scores.")
+// The reward has to be measured to the first thing standing in the way, not to
+// the most attractive level in the room. The draw-on-liquidity ranking scores
+// pools by magnetism, so on gold it names a weekly high thirty points off while
+// an equal-highs cluster sits four points above the entry — and price has to
+// deliver into that cluster before it can reach anything beyond it. Measuring to
+// the far pool produced 15R on setups whose realistic objective was 1.5R, which
+// is why the reward:risk test never rejected anything.
+rrTargetMode = input.string("Nearest Pool", "Reward:Risk Measured To", options=["Nearest Pool", "Draw on Liquidity"], group=sniperSection, tooltip="Nearest Pool measures to the first unswept pool in the trade's direction — the obstacle price must clear before any further objective is reachable. Draw on Liquidity is the legacy behaviour and measures to the highest-ranked pool, which is optimistic whenever something is resting in between.")
+rrTargetCapATR = input.float(10.0, "Reward:Risk Target Cap (x ATR)", minval=1.0, maxval=50.0, step=0.5, group=sniperSection, tooltip="A backstop on the measured objective, so a daily or weekly level tens of ATR away can never hand an intraday setup a fictional reward. Caps the R:R test only — the drawn TP3 line still sits on the real level.")
+maxSignalsPerKZ = input.int(3, "Max A+ Signals per Killzone", minval=0, maxval=20, group=sniperSection, tooltip="A budget, counted per killzone window and reset when a new one opens. The fourth setup inside one NY AM session is rarely better than the first three and is usually the market ranging. 0 disables the cap.")
+flipCooldownMult = input.float(2.0, "Opposite-Direction Cooldown (x)", minval=0.0, maxval=10.0, step=0.5, group=sniperSection, tooltip="Multiplies Min Bars Between Signals to mute the *opposite* direction after a fire. Cooldowns were per-direction only, so a BUY and a SELL could print on consecutive bars — which is what a chopping market produces and what no trader would take. 0 restores the old independent behaviour.")
+confirmMinBodyATR = input.float(0.25, "Min Confirmation Body (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=sniperSection, tooltip="A confirmation candle has to be a real one. The mean-reclaim trigger previously accepted any candle closing the right side of the array's 50% line, however small — on a 3-minute chart that is roughly every other bar, so a setup at a level was almost guaranteed to confirm within its window.")
 
 // ===== SNIPER HARD GATES =====
 // Each gate can be switched off individually, and the dashboard checklist always
@@ -162,12 +181,39 @@ gateITF = input.bool(false, "Require Intermediate PD Array Agreement", group=gat
 gatePD = input.bool(false, "Require Correct Half of Dealing Range", group=gateSection, tooltip="Never buy in premium, never sell in discount. Off by default because as a veto it deadlocks against the structure gate — in a downtrend price sits in discount, so shorts fail this and longs fail structure, and nothing can ever fire. It is scored by the stack instead.")
 gateKZ = input.bool(false, "Require Active Killzone", group=gateSection)
 gateStruct = input.bool(true, "Require Valid Structure State", group=gateSection, tooltip="Post-CISD, post-MSS/CHoCH, or a BOS continuation in the trade's direction. Armed by default: with no structure shift there is no reversal to trade.")
-structValidWindow = input.int(15, "Structure Valid For (bars)", minval=1, maxval=100, group=gateSection)
+structValidWindow = input.int(20, "Structure Valid For (bars)", minval=1, maxval=100, group=gateSection)
 gateLiq = input.bool(false, "Require Liquidity Taken", group=gateSection, tooltip="A purge, a Turtle Soup raid or a Judas swing in the trade's direction. Price has to have run stops before it reverses.")
 liqTakenWindow = input.int(20, "Liquidity Taken Within (bars)", minval=1, maxval=100, group=gateSection)
 gateSMT = input.bool(false, "Reject Opposing SMT Divergence", group=gateSection)
 gateDOL = input.bool(false, "Require Draw on Liquidity in Trade Direction", group=gateSection)
 dolMinRoomATR = input.float(2.0, "Min DOL Room (x ATR)", minval=0.5, maxval=20.0, step=0.5, group=gateSection)
+// ── Directional confluence ──────────────────────────────────────────────────
+// The gates above are vetoes, and vetoes multiply: arming enough of them to
+// enforce a direction deadlocks the engine, which is why all but structure ship
+// disarmed and why nothing then enforces a direction at all. A vote does the job
+// vetoes cannot. Five state variables the engine already maintains each say
+// which way they lean; the trade has to carry a majority of the ones that have
+// an opinion. No single factor can block, so there is no pair to deadlock, but a
+// setup with the market genuinely split against it cannot pass either.
+gateConfluence = input.bool(true, "Require Directional Confluence", group=gateSection, tooltip="Counts how many of HTF bias, chart swing trend, draw on liquidity, dealing-range half and Power of 3 phase agree with the trade. A factor with no reading abstains rather than voting against. Armed by default: it is the only thing in the cascade that stops the engine buying highs and selling lows in a market whose own state variables disagree with each other.")
+minConfluence = input.int(3, "Min Agreeing Factors", minval=1, maxval=5, group=gateSection, tooltip="Out of five. The trade must also have more factors for it than against it, so 3-of-5 with the other two opposed still passes but 2-of-5 never does. Drop to 2 if the engine goes quiet on a trending day; 4 is very strict and will only fire when the whole picture lines up.")
+// ── Delivery regime ─────────────────────────────────────────────────────────
+// Balance versus expansion. Inside a range every array gets tapped, every tap
+// produces a reclaim candle, and both directions confirm in turn — which is the
+// single condition under which this engine produces the most signals and the
+// worst ones. Kaufman's efficiency ratio measures it directly: net displacement
+// over the distance actually travelled to achieve it.
+gateRegime = input.bool(true, "Reject Consolidation (Balance)", group=gateSection, tooltip="Refuses signals while price is balancing rather than delivering — but only in the middle of the range. Measured as net movement over total path across the lookback: a market that travelled forty points to end four from where it started is rotating, and a reversal signal in the middle of that rotation is noise. At the range extremes the same reading means something else entirely; see Range Edge Band. Note that a deep pullback inside a trend also reads as low efficiency, and exempting those on a strong directional vote was tried and measurably lost money — the vote holds its reading for hours while efficiency changes bar to bar, so the exemption disabled this gate almost permanently in exactly the mid-range chop it exists to refuse.")
+regimeLen = input.int(20, "Regime Lookback (bars)", minval=5, maxval=100, group=gateSection)
+regimeMinER = input.float(0.28, "Min Delivery Efficiency", minval=0.0, maxval=1.0, step=0.02, group=gateSection, tooltip="0 = pure noise, 1 = a straight line. Below roughly 0.25 a market is genuinely rotating. Raise toward 0.4 to trade only clean expansion, lower to 0.2 if this is still blocking too much.")
+// Efficiency alone was the wrong test, and it rejected two-thirds of every bar
+// on the chart. Low efficiency *is* the definition of a range being raided —
+// Turtle Soup, the Judas swing and every purge-and-reverse happen precisely
+// because price spent the lookback rotating, which is what puts the stops at the
+// edge worth running. Applied without regard to where in the range price sits,
+// the gate filtered out the core ICT reversal model and kept only continuation
+// entries in moves that had already been delivered.
+regimeEdgeBand = input.float(0.30, "Range Edge Band", minval=0.0, maxval=0.5, step=0.05, group=gateSection, tooltip="The fraction of the dealing range at each end that counts as an extreme. Inside these bands a balancing market is exactly the setup — the range is being tested and the reversal is taken there — so the consolidation gate stands down. Between them it is chop, and the gate holds. 0 makes the gate unconditional again, which is the behaviour that made it the single largest blocker in the cascade.")
 
 // ===== SNIPER STACK WEIGHTS =====
 // Stage B. Applied only to setups that already cleared every armed gate, so
@@ -183,6 +229,7 @@ wSMT = input.float(10.0, "SMT Confirmation", minval=0.0, maxval=50.0, step=1.0, 
 wTime = input.float(12.0, "Timing (Macro / Silver Bullet)", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
 wDOLRoom = input.float(10.0, "DOL Room & Alignment", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
 wPD = input.float(12.0, "Premium / Discount Half", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Buying discount and selling premium. Scored rather than vetoed: as a hard gate it deadlocked against the structure gate, because in a downtrend price sits in discount — so shorts were refused for being in the wrong half while longs were refused for having no bullish structure.")
+wPO3 = input.float(8.0, "Power of 3 Phase", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Where in the day's Accumulation / Manipulation / Distribution cycle the setup sits. The manipulation leg — stops harvested, price about to reverse — is where the algorithm wants to fill you. A distribution-phase entry is chasing a move that has already been delivered, and an accumulation-phase entry is guessing which way the range breaks.")
 
 // ===== SMT DIVERGENCE =====
 smtSection = "SMT Divergence"
@@ -262,25 +309,26 @@ showVI = input.bool(false, "Volume Imbalances", group=pdSection, tooltip="A gap 
 viMinATR = input.float(0.10, "Min Volume Imbalance (x ATR)", minval=0.01, maxval=1.0, step=0.01, group=pdSection)
 showOG = input.bool(true, "Opening Gaps (NDOG / NWOG)", group=pdSection, tooltip="New Day and New Week Opening Gaps — the gap between the prior session close and the new session open. Reference levels: they are never retired for being traded through.")
 ogMinATR = input.float(0.02, "Min Opening Gap (x ATR)", minval=0.0, maxval=1.0, step=0.01, group=pdSection)
-showFVGCE = input.bool(true, "Show FVG Consequent Encroachment", group=pdSection, tooltip="The 50% line of every live gap. This is where ICT entries are actually taken, not the far edge.")
-requireCETap = input.bool(true, "Require CE Tap for Entry", group=pdSection, tooltip="An entry only triggers once price reaches the gap's 50% line. Fewer signals, deeper and better-priced fills. Pair it with an FVG Mitigation Depth of 0.5 or deeper: a shallower depth retires the gap before price ever reaches its CE.")
+showFVGCE = input.bool(true, "Show FVG Consequent Encroachment", group=pdSection, tooltip="The 50% line of every live gap. This is where ICT entries are actually taken, not the far edge — the entry engine arms on a tap that reaches it, and confirms on a close that reclaims it.")
 
 // ===== OTE & STANDARD DEVIATION PROJECTIONS =====
 oteSection = "OTE & Standard Deviation Projections"
 showOTE = input.bool(true, "Show OTE Band (0.62 / 0.705 / 0.79)", group=oteSection, tooltip="The Optimal Trade Entry retracement of the current impulse leg.")
-showSDProj = input.bool(true, "Show Standard Deviation Projections", group=oteSection, tooltip="Objectives projected past the leg extreme at 0.5 / 1 / 2 standard deviations of the leg itself.")
-useSDTargets = input.bool(true, "Use SD Projections as TP2 / TP3", group=oteSection, tooltip="Replaces the arbitrary 0.75R / 1.5R partials with the leg's own measured objectives, falling back to R-multiples when the current leg points against the trade.")
+showSDProj = input.bool(true, "Show Standard Deviation Projections", group=oteSection, tooltip="Objectives projected past the leg extreme at 0.5 / 1 / 2 standard deviations of the leg itself. The engine uses these as TP1 and TP2 whenever the current leg runs the trade's way, falling back to R multiples when it does not.")
 oteMinLegATR = input.float(1.0, "Min Leg Size (x ATR)", minval=0.2, maxval=10.0, step=0.1, group=oteSection, tooltip="Legs smaller than this are noise and produce no OTE band or projections.")
-
-// ===== SMART ATR SL/TP SETTINGS =====
-atrSection = "Smart ATR SL/TP"
-useSmartATR = input.bool(true, "Use Smart ATR SL/TP", group=atrSection, tooltip="ATR-based stops that adapt to the instrument's own volatility — overrides fixed SL padding")
-atrSLMultiplier = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group=atrSection)
-atrTPMultiplier = input.float(3.0, "ATR TP Multiplier", minval=1.0, maxval=10.0, step=0.5, group=atrSection)
 
 // Display Settings
 displaySection = "Display Settings"
 showStatusTable = input.bool(true, "Show Status Table", group=displaySection)
+// Naming the gate that blocked *this* bar explains one candle. Counting what
+// every gate has rejected across the whole history explains the chart, and is
+// the difference between tuning on evidence and tuning by guesswork.
+showDiagnostics = input.bool(true, "Show Gate Diagnostics", group=displaySection, tooltip="Adds two dashboard rows: how many bars each armed gate has rejected across the loaded history, and why setups that cleared every gate still did not fire. Read the Gates row before changing any threshold.")
+// Counting what the signals actually did is the only thing that turns tuning
+// from an argument into a measurement. Every fired signal already draws a stop
+// and three objectives and the lifecycle already watches them get hit — it just
+// threw the answer away.
+showPerf = input.bool(true, "Show Signal Performance", group=displaySection, tooltip="Adds a row counting what fired signals reached: how many touched TP1, TP2 and TP3, and how many hit the stop first. First-touch only, with no assumed management, so it measures the engine's edge rather than a position-sizing policy. A bar where both the stop and a target are touched is scored as the stop, which keeps the number pessimistic rather than flattering.")
 redrawEveryTick = input.bool(false, "Redraw Every Tick", group=displaySection, tooltip="Off (default): drawings and both panels are rebuilt once per bar. Every detector here is already gated to confirmed bars, so rebuilding on each tick deletes and recreates several hundred boxes, lines and labels to produce an identical picture — it is the dominant cost in real time. On: legacy behaviour, worth having only when Non-Repainting Mode is off and you want intrabar zones to move live.")
 
 
@@ -312,14 +360,6 @@ breakawayFVGTransp = input.int(70, "Transparency", minval=0, maxval=100, inline=
 rejectionFVGColorInput = input.color(color.orange, "Rejection FVG Color", inline="rejection_color", group=colorSection)
 rejectionFVGTransp = input.int(70, "Transparency", minval=0, maxval=100, inline="rejection_color", group=colorSection)
 
-// Confluence Score Tier Colors
-highScoreColorInput = input.color(color.rgb(0, 200, 80), "High Score FVG Color", inline="high_score", group=colorSection)
-highScoreTransp = input.int(60, "Transparency", minval=0, maxval=100, inline="high_score", group=colorSection)
-medScoreColorInput = input.color(color.rgb(255, 200, 0), "Medium Score FVG Color", inline="med_score", group=colorSection)
-medScoreTransp = input.int(65, "Transparency", minval=0, maxval=100, inline="med_score", group=colorSection)
-lowScoreColorInput = input.color(color.rgb(200, 50, 50), "Low Score FVG Color", inline="low_score", group=colorSection)
-lowScoreTransp = input.int(75, "Transparency", minval=0, maxval=100, inline="low_score", group=colorSection)
-
 // Mitigated FVG transparency
 mitigatedAlphaInput = input.int(90, "Mitigated FVG Transparency", minval=0, maxval=100, group=colorSection)
 
@@ -331,17 +371,10 @@ tpTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="tp_color"
 partialTPColorInput = input.color(color.teal, "Partial TP Color", inline="ptp_color", group=colorSection)
 partialTPTransp = input.int(30, "Transparency", minval=0, maxval=100, inline="ptp_color", group=colorSection)
 
-// Signal Colors
-buySignalColorInput = input.color(color.green, "Buy Signal Color", inline="buy_color", group=colorSection)
-buySignalTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="buy_color", group=colorSection)
-sellSignalColorInput = input.color(color.red, "Sell Signal Color", inline="sell_color", group=colorSection)
-sellSignalTransp = input.int(20, "Transparency", minval=0, maxval=100, inline="sell_color", group=colorSection)
-
 // Structure Colors
-upTrendColorInput = input.color(color.green, "Uptrend Color", inline="uptrend_color", group=colorSection)
-upTrendTransp = input.int(40, "Transparency", minval=0, maxval=100, inline="uptrend_color", group=colorSection)
-downTrendColorInput = input.color(color.red, "Downtrend Color", inline="downtrend_color", group=colorSection)
-downTrendTransp = input.int(40, "Transparency", minval=0, maxval=100, inline="downtrend_color", group=colorSection)
+// Swing pivot H / L markers
+upTrendColorInput = input.color(color.green, "Swing Low Marker", group=colorSection)
+downTrendColorInput = input.color(color.red, "Swing High Marker", group=colorSection)
 
 // ICT Structure Colors
 bosColor = input.color(color.rgb(120, 190, 255), "BOS Line Color", group=colorSection)
@@ -419,16 +452,9 @@ mitigatedAlpha = mitigatedAlphaInput
 perfectFVGColor = color.new(perfectFVGColorInput, perfectFVGTransp)
 breakawayFVGColor = color.new(breakawayFVGColorInput, breakawayFVGTransp)
 rejectionFVGColor = color.new(rejectionFVGColorInput, rejectionFVGTransp)
-buySignalColor = color.new(buySignalColorInput, buySignalTransp)
-sellSignalColor = color.new(sellSignalColorInput, sellSignalTransp)
 slColor = color.new(slColorInput, slTransp)
 tpColor = color.new(tpColorInput, tpTransp)
 partialTPColor = color.new(partialTPColorInput, partialTPTransp)
-upTrendColor = color.new(upTrendColorInput, upTrendTransp)
-downTrendColor = color.new(downTrendColorInput, downTrendTransp)
-highScoreColor = color.new(highScoreColorInput, highScoreTransp)
-medScoreColor = color.new(medScoreColorInput, medScoreTransp)
-lowScoreColor = color.new(lowScoreColorInput, lowScoreTransp)
 
 // ===== DATA STRUCTURES =====
 type RiskLevels
@@ -443,14 +469,20 @@ type RiskLevels
     int lastBarDrawn
     bool active
     line slLine
-    line tpLine 
+    line tpLine
     line partialLine
     line partialLine2
     line partialLine3
-    bool trailActive
-    bool breakevenActive
-    float positionSize
-    float entryTime
+    // ── Outcome tracking ────────────────────────────────────────────────────
+    // Which levels this trade actually reached, recorded first-touch and
+    // without assuming any management. "Did price reach TP1 before the stop"
+    // is the raw edge measurement; anything richer would be reporting a
+    // position-management policy the indicator does not implement.
+    bool tp1Hit = false
+    bool tp2Hit = false
+    bool tp3Hit = false
+    bool slHit = false
+    bool counted = false
 
 // FVG Structure start_time / candle3_time are the real chart timestamps of the
 // first and third candle of the gap. Boxes are drawn with xloc.bar_time so HTF
@@ -469,7 +501,6 @@ type FVG
     int mitigatedBar     // the bar the gap was first penetrated to mitigationDepth
     string timeframe
     int creation_bar_idx
-    float confluenceScore
 
 type SwingPoint
     int index
@@ -552,21 +583,34 @@ type QMPattern
     int legBar
     bool active
 
+// ── An armed entry ───────────────────────────────────────────────────────────
+// Price reaching a live array and price confirming it has turned there are two
+// separate events, usually several candles apart. This object is what remembers
+// the first one while the engine waits for the second.
+//
+// `armExtreme` is the furthest price has reached into the array since arming —
+// the wick that actually tested the level. That is the setup's true invalidation
+// and the stop is measured from it, which is both tighter and more honest than
+// the array's own edge.
+type ArmedSetup
+    int dir              // +1 long, -1 short
+    float top
+    float bottom
+    float mean           // the 50% mean threshold = consequent encroachment
+    int tier             // array quality, captured at arm time
+    string kind
+    bool fresh
+    int armBar
+    float armExtreme
+
 
 // ===== GLOBAL VARIABLES =====
 var RiskLevels[] riskLevels = array.new<RiskLevels>()
 var FVG[] bullishFVGs = array.new<FVG>()
 var FVG[] bearishFVGs = array.new<FVG>()
 var SwingPoint[] swingPoints = array.new<SwingPoint>()
-var int[] bullEntries = array.new_int()
-var int[] bearEntries = array.new_int()
 
 var string marketStructure = "Neutral"
-
-var float dailyLoss = 0.0
-var int lastDayReset = dayofweek
-
-var int[] activePositions = array.new_int(0)
 
 // ===== ENGINE STATE =====
 // One zone map for OBs, Breakers and Mitigation blocks
@@ -595,6 +639,15 @@ var float upRunHigh = na
 var int upRunLen = 0
 var bool upRunBroken = true
 
+// ── Armed entries, and the confirmations they produced this bar ──────────────
+// Setups waiting for their confirmation candle. Confirmations are moved into the
+// two single-element buffers below rather than returned, because a function may
+// mutate a global collection but may not reassign a global variable — the same
+// device the delivery run and the flip flag already use.
+var ArmedSetup[] armedSetups = array.new<ArmedSetup>()
+var ArmedSetup[] confirmedLong = array.new<ArmedSetup>()
+var ArmedSetup[] confirmedShort = array.new<ArmedSetup>()
+
 // ── Per-bar caches (performance) ─────────────────────────────────────────────
 // Everything downstream reduces to an integer comparison against these.
 var int livePurgeUpBar = na
@@ -610,7 +663,6 @@ var bool itfGapBear = false
 var string lastCISDDir = "None"
 var int lastCISDBar = na
 var float lastCISDLevel = na
-var bool lastCISDDisplaced = false
 var string lastPurgeDir = "None"
 var int lastPurgeBar = na
 var float lastPurgeExtreme = na
@@ -661,6 +713,19 @@ atrRef = ta.atr(atrPeriod)
 atrRefSMA = ta.sma(atrRef, 50)
 volUnit = math.max(nz(atrRef), syminfo.mintick * 10)
 tapTol = tapToleranceATR * volUnit
+
+// ===== DELIVERY REGIME =====
+// Kaufman's efficiency ratio: how much of the distance price actually travelled
+// went anywhere. Computed here at the top of the file rather than beside the
+// gate that reads it, because Pine resolves identifiers in file order and the
+// sniper cascade is defined well before the structure engine.
+//
+// This is the measurement the engine was missing entirely. Inside a range every
+// array gets tapped, every tap finds a reclaim candle, and the two directions
+// confirm alternately — so the engine's signal count *peaks* exactly where its
+// edge is worst. A ratio near zero says price spent the lookback rotating.
+regimePath = nz(math.sum(math.abs(close - close[1]), regimeLen))
+deliveryER = regimePath > 0 ? math.abs(close - close[regimeLen]) / regimePath : 0.0
 
 // ===== NON-REPAINT GATE =====
 // barstate.isconfirmed is always true on historical bars, so historical output
@@ -818,6 +883,14 @@ if not na(htfBiasClose)
     else if not na(htfBiasLo) and htfBiasClose < htfBiasLo
         htfBias := -1
 
+// ── The dealing range's anchor ──
+// Requested here with the other higher-timeframe reads, unconditionally: Pine
+// requires request.security at global scope, and the source input then selects
+// between the results rather than between the requests. Both are cheap — the
+// daily read is one the script already needs for PDH/PDL.
+[drHTFHi, drHTFLo] = request.security(syminfo.tickerid, drTF, [ta.highest(high, drLen), ta.lowest(low, drLen)], lookahead=barmerge.lookahead_off)
+[dayHi, dayLo] = request.security(syminfo.tickerid, "D", [high, low], lookahead=barmerge.lookahead_off)
+
 // ===== ICT STRUCTURE ENGINE STATE =====
 // Swing structure drives the primary trend and the dealing range.
 var float swingHighPrice = na
@@ -859,19 +932,20 @@ var float drLow = na
 var float drEq = na
 var bool inPremium = false
 var bool inDiscount = false
-
-// Signal trigger references, so SL/TP bind to the zone that actually fired the
-// signal rather than whichever matching zone happens to be newest in the array.
-// Held in single-element arrays because Pine functions may mutate a global
-// collection but may not reassign a global variable.
-var FVG[] bullTriggerRef = array.new<FVG>()
-var FVG[] bearTriggerRef = array.new<FVG>()
+// The impulse leg, kept separate from the dealing range. The two used to be the
+// same pair of numbers, which was only correct while the range was built from
+// chart swings. Once premium/discount is anchored to a higher timeframe the OTE
+// band would otherwise become an HTF retracement and the standard-deviation
+// projections would be measured off a leg the chart never delivered — so the leg
+// keeps its own chart-local extremes and OTE is unaffected by the range source.
+var float legHigh = na
+var float legLow = na
 
 // ── OTE leg and its standard deviation projections ─────────────────
-// Declared here rather than where they are computed, because createRiskLevel()
-// reads them for TP2/TP3 and Pine resolves identifiers in file order. The values
-// are assigned in the engine section, after the dealing range that defines the
-// leg and before any signal consumes them.
+// Declared here rather than where they are computed, because the sniper engine
+// reads them for its objectives and Pine resolves identifiers in file order. The
+// values are assigned in the engine section, after the dealing range that
+// defines the leg and before any signal consumes them.
 var int oteDir = 0
 var bool oteValid = false
 var float oteAnchor = na    // the leg's origin
@@ -898,6 +972,15 @@ var float dolAboveScore = 0.0
 var float dolBelowScore = 0.0
 var string dolAboveName = ""
 var string dolBelowName = ""
+// The *nearest* unswept pool on each side, which is a different question from
+// the best-ranked one and the one the reward:risk test actually needs. Ranking
+// answers "where is price being delivered"; this answers "what is in the way
+// first", and a target beyond an untouched pool is not a target price can reach
+// without first delivering into that pool.
+var float dolNearAbovePx = na
+var float dolNearBelowPx = na
+var string dolNearAboveName = ""
+var string dolNearBelowName = ""
 
 // Candidate buffer for the DOL ranking pass. Plain parallel scalars rather than
 // objects: the list is rebuilt on every bar and read once, and allocating a
@@ -964,10 +1047,26 @@ var label[] eventLabelRefs = array.new<label>()
 // The gate results live in bool arrays rather than a dozen scalars so the
 // dashboard can walk them by index and name the first that failed without
 // knowing anything about what the gates are. Index order is the cascade order: 0
-// HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone 4
-// structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 array tap
-var bool[] gateL = array.new_bool(9, false)
-var bool[] gateS = array.new_bool(9, false)
+// HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone · 4
+// structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 directional
+// confluence · 9 delivery regime · 10 confirmed entry.
+//
+// The entry stays last by construction: everything above it describes the market
+// and can be evaluated on any bar, while the entry is the trigger itself and is
+// only meaningful once the cascade above it has passed.
+var bool[] gateL = array.new_bool(11, false)
+var bool[] gateS = array.new_bool(11, false)
+// Cooldowns are per direction. Sharing one bar index meant a long muted every
+// short behind it for the whole window, which is not what a cooldown is for: it
+// exists to stop the *same* setup being re-signalled, and an opposing setup is
+// by definition a different one.
+var int lastSniperBarL = na
+var int lastSniperBarS = na
+// B grade carries its own cooldown so a stream of B markers can never crowd out
+// an A+ that forms shortly after one, and so B respects a recent A+ in turn.
+var int lastBTierBarL = na
+var int lastBTierBarS = na
+// The most recent signal of either direction, for the dashboard's "last ▲ 12b".
 var int lastSniperBar = na
 var int sniperDir = 0
 var string sniperModel = ""
@@ -986,32 +1085,63 @@ var float watchScoreS = 0.0
 var string watchModelL = ""
 var string watchModelS = ""
 var float bestScoreSeen = 0.0
-var int sniperEvalBars = 0
 var int cascadePassBars = 0
 var int signalCount = 0
+// ── Diagnostics ────────────────────────────────────────────────────────────
+// Per-gate rejection counts over the whole loaded history, indexed the same way
+// as gateL / gateS. Every armed gate that failed on a bar is counted, not just
+// the first: the first-failure view is exactly what hid a deadlocked gate pair,
+// because a gate downstream of the blocker never gets to report itself.
+var int[] gateBlockL = array.new_int(11, 0)
+var int[] gateBlockS = array.new_int(11, 0)
+// Why setups that cleared every gate still did not fire. Without these the
+// cascade tally reads "45 setups, 27 fired" and the missing 18 are unexplained.
+var int rejScore = 0
+var int rejRR = 0
+var int rejCooldown = 0
+var int rejStop = 0
+var int rejBudget = 0
+// Not a rejection: how many confirmed setups had their stop set by the noise
+// floor rather than by their own invalidation. See the note at the increment.
+var int floorCount = 0
+var int bTierCount = 0
+// ── Armed-entry lifecycle ──────────────────────────────────────────────────
+// Where setups go once price reaches the level. `expired` (price sat there and
+// never turned) versus `voided` (the array itself failed) versus `confirmed` is
+// the distinction that separates a quiet market from a broken engine, and it is
+// not answerable from a single "no tap" counter.
+//
+// Held in an array rather than as four scalars because the functions that
+// advance the state machine are the ones that have to count, and a Pine function
+// may mutate a global collection but may not reassign a global variable.
+// Index 0 armed · 1 confirmed · 2 expired · 3 voided
+var int[] armStats = array.new_int(4, 0)
+bumpArmStat(int i) =>
+    array.set(armStats, i, array.get(armStats, i) + 1)
+
+// ── Signal performance ─────────────────────────────────────────────────────
+// What fired signals actually reached, recorded first-touch. Held in an array
+// for the same reason armStats is: the lifecycle function that observes the hits
+// may mutate a global collection but may not reassign a global scalar.
+// Index 0 closed · 1 reached TP1 · 2 reached TP2 · 3 reached TP3 · 4 stopped first
+var int[] perfStats = array.new_int(5, 0)
+bumpPerfStat(int i) =>
+    array.set(perfStats, i, array.get(perfStats, i) + 1)
+
+// ── Per-killzone signal budget ─────────────────────────────────────────────
+// Reset whenever the active window changes, so the count is "signals taken in
+// this NY AM session" rather than a rolling total.
+var int kzSignalCount = 0
+var string kzBudgetWindow = ""
 var label[] sniperLabelRefs = array.new<label>()
 var label[] watchLabelRefs = array.new<label>()
+var label[] bTierLabelRefs = array.new<label>()
 
 
 
 
 
 // ===== HELPER FUNCTIONS =====
-getCurrentPositions() =>
-    array.size(activePositions)
-
-addPosition() =>
-    array.push(activePositions, bar_index)
-    if array.size(activePositions) > maxConcurrentPositions * 2
-        array.shift(activePositions)
-
-removePosition() =>
-    if array.size(activePositions) > 0
-        array.pop(activePositions)
-
-isMaxPositionsReached() =>
-    getCurrentPositions() >= maxConcurrentPositions
-
 // Delete-and-clear helpers for tracked drawing objects, so draw functions can
 // safely redraw from scratch without accumulating orphaned boxes/labels/lines
 clearBoxes(refs) =>
@@ -1046,55 +1176,12 @@ capBoxes(array<box> refs, int maxN) =>
     while array.size(refs) > maxN
         box.delete(array.shift(refs))
 
-resetDailyLoss() =>
-    dayofweek != lastDayReset
-
-// ===== CONFLUENCE SCORING FUNCTIONS =====
-// Pre-compute indicators used by scoring (called once per bar in main execution)
-rsiValue = ta.rsi(close, 14)
+// ===== SCORING PRIMITIVES =====
+// What survived the removal of the old confluence model. Both of these are
+// consumed by the sniper stack, which is now the only scorer in the script.
 volSMA = ta.sma(volume, 20)
 
-// Factor 1: Trend Alignment
-scoreTrendAlignment(fvgType) =>
-    if fvgType == "BISI" and marketStructure == "Uptrend"
-        1.0
-    else if fvgType == "SIBI" and marketStructure == "Downtrend"
-        1.0
-    else if marketStructure == "Neutral"
-        0.5
-    else
-        0.1  // Counter-trend = low score
-
-// Factor 2: RSI as a pullback filter
-scoreRSI(fvgType) =>
-    if fvgType == "BISI"
-        if rsiValue >= 45 and rsiValue <= 62
-            1.0
-        else if rsiValue >= 38 and rsiValue < 45
-            0.85
-        else if rsiValue > 62 and rsiValue <= 72
-            0.6
-        else if rsiValue >= 30 and rsiValue < 38
-            0.45
-        else if rsiValue > 72
-            0.2
-        else
-            0.15
-    else
-        if rsiValue >= 38 and rsiValue <= 55
-            1.0
-        else if rsiValue > 55 and rsiValue <= 62
-            0.85
-        else if rsiValue >= 28 and rsiValue < 38
-            0.6
-        else if rsiValue > 62 and rsiValue <= 70
-            0.45
-        else if rsiValue < 28
-            0.2
-        else
-            0.15
-
-// Factor 3: Volume Confirmation
+// Volume confirmation.
 scoreVolume() =>
     if na(volSMA) or volSMA == 0
         0.5
@@ -1111,94 +1198,23 @@ scoreVolume() =>
         else
             0.2
 
-// Factor 4: FVG Variant Quality
-scoreVariant(variant) =>
-    if variant == "Perfect"
-        1.0
-    else if variant == "Breakaway"
-        0.7
-    else if variant == "Rejection"
-        0.4
-    else
-        0.3
-
-// Factor 5: Session Timing, read off the killzone map
-scoreSession() =>
-    if inMacro
-        1.0
-    else if inSilverBullet
-        0.95
-    else if inNYAMKZ
-        0.9
-    else if inLondonKZ
-        0.85
-    else if inLNCloseKZ
-        0.65
-    else if inAsiaKZ
-        0.35
-    else
-        0.2
-
-// Factor 6: Volatility Regime
-scoreVolatility() =>
-    if na(atrRefSMA) or atrRefSMA == 0
+// Power of 3 phase quality. The manipulation leg — stops harvested, price about
+// to reverse out of the day's range — is where the algorithm wants to fill you.
+// Distribution is the move already delivered, so an entry there is a chase, and
+// accumulation is a guess at which way the range breaks.
+scorePO3(int dir) =>
+    if not showPO3
         0.5
+    else if po3Phase == "Manipulation"
+        // Only in the direction the manipulation sets up: a sweep of the lows is
+        // the setup for a long, and tells a short nothing good.
+        po3Dir == dir ? 1.0 : 0.25
+    else if po3Phase == "Distribution"
+        po3Dir == dir ? 0.45 : 0.15
     else
-        volRatio = atrRef / atrRefSMA
-        if volRatio >= 0.8 and volRatio <= 1.5
-            1.0  // Healthy range
-        else if volRatio > 1.5 and volRatio <= 2.0
-            0.7  // Elevated but tradeable
-        else if volRatio > 2.0
-            0.3  // Too volatile / erratic
-        else if volRatio >= 0.5 and volRatio < 0.8
-            0.6  // Low but acceptable
-        else
-            0.2  // Dead market
-
-calculateConfluenceScore(fvgType, fvgVariant) =>
-    totalWeight = weightTrend + weightRSI + weightVolume + weightVariant + weightSession + weightVolatility
-    safeTotal = math.max(totalWeight, 1.0)
-    
-    s1 = scoreTrendAlignment(fvgType) * weightTrend
-    s2 = scoreRSI(fvgType) * weightRSI
-    s3 = scoreVolume() * weightVolume
-    s4 = scoreVariant(fvgVariant) * weightVariant
-    s5 = scoreSession() * weightSession
-    s6 = scoreVolatility() * weightVolatility
-    
-    rawScore = (s1 + s2 + s3 + s4 + s5 + s6) / safeTotal * 100
-    math.round(math.max(0.0, math.min(100.0, rawScore)), 0)
-
-getScoreColor(score) =>
-    if score >= 70
-        highScoreColor
-    else if score >= 45
-        medScoreColor
-    else
-        lowScoreColor
-
-getScoreTier(score) =>
-    if score >= 70
-        "A"
-    else if score >= 45
-        "B"
-    else
-        "C"
-
-// Calculate position size based on volatility and risk per trade.
-calculatePositionSize(entryPrice, stopPrice) =>
-    if not useVolatilityBasedSizing or na(atrRefSMA) or atrRefSMA == 0
-        1.0
-    else
-        volatilityRatio = atrRef / atrRefSMA
-        adjustedSize = 1.0 / math.max(0.5, math.min(2.0, volatilityRatio))
-        risk = math.abs(entryPrice - stopPrice) / entryPrice
-        if risk <= 0
-            1.0
-        else
-            riskAdjustedSize = adjustedSize * (riskPerTrade / 100 / risk)
-            math.max(0.1, math.min(2.0, riskAdjustedSize))
+        // Accumulation is a guess at which way the range breaks, and the engine
+        // should say so rather than paying it 40% for turning up.
+        0.25
 
 // ===== KILLZONE AWARENESS =====
 // The killzone currently live, resolved from the DST-aware time engine above.
@@ -1392,9 +1408,16 @@ addZone(float zTop, float zBot, string kind, int dir, int cBar, string origin) =
     made
 
 // Quality tier, 1 (weakest) to 5 (Unicorn).
+// The penalty starts at the *second* touch, not the first. updateZones() runs
+// earlier in the bar than the entry engine and has already counted the arriving
+// tap, so penalising `touches > 0` charged every pristine first-touch block the
+// used-zone discount on its own entry bar — a fifth off the largest weight in
+// the stack, applied to exactly the setups worth taking. A zone's first retest
+// is also its highest-probability test, so this is the correct reading twice
+// over.
 zoneTier(Zone z) =>
     base = z.kind == "Unicorn" ? 5 : z.kind == "BPR" or z.kind == "Breaker" or z.kind == "Propulsion" ? 4 : z.kind == "OB" or z.kind == "IFVG" ? 3 : z.kind == "Mitigation" or z.kind == "Rejection" ? 2 : 1
-    int tier = base - (z.touches > 0 ? 1 : 0)
+    int tier = base - (z.touches > 1 ? 1 : 0)
     tier < 1 ? 1 : tier
 
 tierStars(int t) =>
@@ -1883,15 +1906,6 @@ drawTimeAndDOL() =>
             array.push(dolLineRefs, line.new(int(math.max(0, bar_index - 40)), altPx, bar_index + 12, altPx, color=color.new(altCol, 65), width=1, style=line.style_dashed))
             array.push(dolLabelRefs, label.new(bar_index + 12, altPx, altNm, style=label.style_label_left, color=color.new(altCol, 60), textcolor=color.white, size=size.tiny))
 
-// ===== SMART ATR-BASED SL/TP =====
-// Distances scale with the instrument's own ATR, so no per-symbol boost is
-// needed.
-getSmartATRSL() =>
-    not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrSLMultiplier
-
-getSmartATRTP() =>
-    not useSmartATR or na(atrRef) ? 0.0 : atrRef * atrTPMultiplier
-
 // ===== FVG DETECTION AND MANAGEMENT =====
 // t0 and t2 are the timestamps of the third and first candle of the gap. Writes
 // into two buffers the caller owns rather than allocating a fresh pair every
@@ -1911,7 +1925,7 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0, array<FVG> outBull, arr
                     variant := "Breakaway"
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) < nz(l[0]) + (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
-                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("BISI", variant))
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[0]), bottom=nz(h[2]), fvgType="BISI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx)
                 array.push(outBull, newFVG)
 
         if detectSIBI
@@ -1922,7 +1936,7 @@ detectFVGs(h, l, c, o, tf, barIdx, gapThreshold, t2, t0, array<FVG> outBull, arr
                     variant := "Breakaway"
                 else if (nz(h[0]) - nz(l[0])) > 0 and nz(c[0]) > nz(h[0]) - (nz(h[0]) - nz(l[0])) * 0.3
                     variant := "Rejection"
-                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx, confluenceScore=calculateConfluenceScore("SIBI", variant))
+                newFVG = FVG.new(start_idx=barIdx - 2, candle3_idx=barIdx, start_time=int(nz(t2)), candle3_time=int(nz(t0)), top=nz(l[2]), bottom=nz(h[0]), fvgType="SIBI", fvgVariant=variant, mitigated=false, mitigatedBar=na, timeframe=tf, creation_bar_idx=barIdx)
                 array.push(outBear, newFVG)
     array.size(outBull) + array.size(outBear)
 
@@ -1933,7 +1947,7 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
 
     ifvgDepth = ifvgPierceATR * volUnit
     size = array.size(fvgArray)
-    if size > 0 
+    if size > 0
         for idx = 0 to size - 1
             i = size - 1 - idx
             if i < 0
@@ -1979,122 +1993,55 @@ processAndCleanFVGs(fvgArray, currentLow, currentHigh) =>
                     // costs nothing visually and preserves the IFVG path.
 
 // ===== DRAWING FUNCTIONS =====
+// One pass over one side. The two halves were near-identical and drifted apart
+// as each was edited, so the direction is a parameter now.
+drawFVGSide(array<FVG> fvgs, bool isBull) =>
+    baseColor = isBull ? bullishFVGColor : bearishFVGColor
+    baseBorder = isBull ? bullishFVGBorderColor : bearishFVGBorderColor
+    for fvg in fvgs
+        if fvg.mitigated and not showMitigated
+            continue
+        boxColor = baseColor
+        currentAlpha = 60
+        if fvg.mitigated
+            currentAlpha := mitigatedAlpha
+        else if fvg.fvgVariant == "Perfect"
+            boxColor := perfectFVGColor
+        else if fvg.fvgVariant == "Breakaway"
+            boxColor := breakawayFVGColor
+        else if fvg.fvgVariant == "Rejection"
+            boxColor := rejectionFVGColor
+
+        boxBgColor = color.new(boxColor, currentAlpha)
+        boxBorderColor = color.new(baseBorder, fvg.mitigated ? mitigatedAlpha : 20)
+        // Time coordinates keep HTF zones anchored to the bars they belong to.
+        right_time = extendFVG ? time : fvg.candle3_time
+        if right_time < fvg.candle3_time
+            right_time := fvg.candle3_time
+        // A gap the intermediate term also left is the one worth seeing from
+        // across the chart, so that is what earns the heavier border.
+        borderWidth = fvg.timeframe != timeframe.period ? 2 : 1
+        array.push(fvgBoxRefs, box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth))
+
+        // Consequent encroachment — the gap's 50% line, which is the level
+        // entries are actually armed and confirmed at rather than the far edge.
+        if showFVGCE and not fvg.mitigated
+            ceLvl = math.avg(fvg.top, fvg.bottom)
+            array.push(fvgCELineRefs, line.new(fvg.start_time, ceLvl, right_time, ceLvl, xloc=xloc.bar_time, color=ceLineColor, width=1, style=line.style_dotted))
+
+        // HTF timeframe label
+        if fvg.timeframe != timeframe.period
+            labelText = fvg.timeframe + "\n" + fvg.fvgVariant
+            anchor = isBull ? fvg.top : fvg.bottom
+            array.push(fvgLabelRefs, label.new(fvg.candle3_time, anchor, labelText, xloc=xloc.bar_time, style=isBull ? label.style_label_down : label.style_label_up, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny))
+
 drawFVGs() =>
     clearBoxes(fvgBoxRefs)
     clearLabels(fvgLabelRefs)
     clearLines(fvgCELineRefs)
-    bullishSize = array.size(bullishFVGs)
-    if bullishSize > 0
-        for i = 0 to bullishSize - 1
-            fvg = array.get(bullishFVGs, i)
-            boxColor = bullishFVGColor
-            borderColor = bullishFVGBorderColor
-            currentAlpha = 60
-
-            if fvg.mitigated and showMitigated
-                currentAlpha := mitigatedAlpha
-                boxColor := bullishFVGColor
-            else if not fvg.mitigated
-                // Score-based color override
-                if scoreColorMode
-                    boxColor := getScoreColor(fvg.confluenceScore)
-                    borderColor := getScoreColor(fvg.confluenceScore)
-                else
-                    if fvg.fvgVariant == "Perfect"
-                        boxColor := perfectFVGColor
-                    else if fvg.fvgVariant == "Breakaway"
-                        boxColor := breakawayFVGColor
-                    else if fvg.fvgVariant == "Rejection"
-                        boxColor := rejectionFVGColor
-            else
-                continue
-
-            boxBgColor = color.new(boxColor, currentAlpha)
-            boxBorderColor = color.new(borderColor, fvg.mitigated and showMitigated ? mitigatedAlpha : 20)
-            // Time coordinates keep HTF zones anchored to the bars they belong
-            // to.
-            right_time = extendFVG ? time : fvg.candle3_time
-            if right_time < fvg.candle3_time
-                right_time := fvg.candle3_time
-            borderWidth = fvg.confluenceScore >= 70 ? 2 : 1
-            newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
-            array.push(fvgBoxRefs, newBox)
-
-            // Consequent encroachment — the gap's 50% line, which is the level
-            // ICT entries are actually taken at rather than the far edge.
-            if showFVGCE and not fvg.mitigated
-                ceLvl = math.avg(fvg.top, fvg.bottom)
-                array.push(fvgCELineRefs, line.new(fvg.start_time, ceLvl, right_time, ceLvl, xloc=xloc.bar_time, color=ceLineColor, width=1, style=line.style_dotted))
-
-            // Score label
-            if showScoreLabels and not fvg.mitigated
-                scoreTier = getScoreTier(fvg.confluenceScore)
-                scoreText = str.tostring(fvg.confluenceScore, "#") + " [" + scoreTier + "]"
-                labelColor = getScoreColor(fvg.confluenceScore)
-                scoreLabel = label.new(fvg.start_time, fvg.top, scoreText, xloc=xloc.bar_time, style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.tiny)
-                array.push(fvgLabelRefs, scoreLabel)
-
-            // HTF timeframe label
-            if fvg.timeframe != timeframe.period and not (fvg.mitigated and not showMitigated)
-                labelText = fvg.timeframe + "\n" + fvg.fvgVariant
-                htfLabel = label.new(fvg.candle3_time, fvg.top, labelText, xloc=xloc.bar_time, style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
-                array.push(fvgLabelRefs, htfLabel)
-
-    bearishSize = array.size(bearishFVGs)
-    if bearishSize > 0
-        for i = 0 to bearishSize - 1
-            fvg = array.get(bearishFVGs, i)
-            boxColor = bearishFVGColor
-            borderColor = bearishFVGBorderColor
-            currentAlpha = 60
-
-            if fvg.mitigated and showMitigated
-                currentAlpha := mitigatedAlpha
-                boxColor := bearishFVGColor
-            else if not fvg.mitigated
-                // Score-based color override
-                if scoreColorMode
-                    boxColor := getScoreColor(fvg.confluenceScore)
-                    borderColor := getScoreColor(fvg.confluenceScore)
-                else
-                    if fvg.fvgVariant == "Perfect"
-                        boxColor := perfectFVGColor
-                    else if fvg.fvgVariant == "Breakaway"
-                        boxColor := breakawayFVGColor
-                    else if fvg.fvgVariant == "Rejection"
-                        boxColor := rejectionFVGColor
-            else
-                continue
-
-            boxBgColor = color.new(boxColor, currentAlpha)
-            boxBorderColor = color.new(borderColor, fvg.mitigated and showMitigated ? mitigatedAlpha : 20)
-            right_time = extendFVG ? time : fvg.candle3_time
-            if right_time < fvg.candle3_time
-                right_time := fvg.candle3_time
-            borderWidth = fvg.confluenceScore >= 70 ? 2 : 1
-            newBox = box.new(fvg.start_time, fvg.top, right_time, fvg.bottom, xloc=xloc.bar_time, bgcolor=boxBgColor, border_color=boxBorderColor, border_width=borderWidth)
-            array.push(fvgBoxRefs, newBox)
-
-            if showFVGCE and not fvg.mitigated
-                ceLvl = math.avg(fvg.top, fvg.bottom)
-                array.push(fvgCELineRefs, line.new(fvg.start_time, ceLvl, right_time, ceLvl, xloc=xloc.bar_time, color=ceLineColor, width=1, style=line.style_dotted))
-
-            // Score label
-            if showScoreLabels and not fvg.mitigated
-                scoreTier = getScoreTier(fvg.confluenceScore)
-                scoreText = str.tostring(fvg.confluenceScore, "#") + " [" + scoreTier + "]"
-                labelColor = getScoreColor(fvg.confluenceScore)
-                scoreLabel = label.new(fvg.start_time, fvg.bottom, scoreText, xloc=xloc.bar_time, style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.tiny)
-                array.push(fvgLabelRefs, scoreLabel)
-
-            // HTF timeframe label
-            if fvg.timeframe != timeframe.period and not (fvg.mitigated and not showMitigated)
-                labelText = fvg.timeframe + "\n" + fvg.fvgVariant
-                htfLabel = label.new(fvg.candle3_time, fvg.bottom, labelText, xloc=xloc.bar_time, style=label.style_label_up, color=color.new(color.gray, 20), textcolor=color.white, size=size.tiny)
-                array.push(fvgLabelRefs, htfLabel)
-
+    drawFVGSide(bullishFVGs, true)
+    drawFVGSide(bearishFVGs, false)
     // Cap the oldest away to keep headroom: with every slider at maximum the
-    // tracked label total stays under 500. With every slider at maximum the
     // tracked label total lands just under 500.
     capBoxes(fvgBoxRefs, 240)
     capLabels(fvgLabelRefs, 35)
@@ -2102,332 +2049,88 @@ drawFVGs() =>
     // and the SD projections, so only the newest gaps keep theirs.
     capLines(fvgCELineRefs, 40)
 
-// ===== ENTRY SIGNAL GENERATION =====
-generateEntrySignals() =>
-    array.clear(bullEntries)
-    array.clear(bearEntries)
-    array.clear(bullTriggerRef)
-    array.clear(bearTriggerRef)
-
-    // canDetect holds signals back until the bar closes in non-repainting mode.
-    if not showEntrySignals or not showLegacySignals or isMaxPositionsReached() or not canDetect
-        [bullEntries, bearEntries]
-    else
-        if not respectTrend or marketStructure == "Uptrend"
-            bullishSize = array.size(bullishFVGs)
-            if bullishSize > 0
-                for i = 0 to bullishSize - 1
-                    fvg = array.get(bullishFVGs, i)
-                    // A gap mitigated on an earlier bar is spent. A gap
-                    // mitigated on this bar was mitigated *by the tap being
-                    // evaluated right now* — reaching consequent encroachment is
-                    // both the entry trigger and the mitigation event, so it
-                    // still counts.
-                    if fvg.mitigated and (na(fvg.mitigatedBar) or fvg.mitigatedBar < bar_index)
-                        continue
-                    if fvg.confluenceScore < minConfluenceScore
-                        continue
-
-                    entrySignal = false
-                    // ATR-scaled tolerance. Consequent encroachment: with
-                    // requireCETap on, the tap has to reach the gap's 50% line
-                    // rather than merely graze its upper edge.
-                    fvgCE = math.avg(fvg.top, fvg.bottom)
-                    tapUpper = requireCETap ? fvgCE : fvg.top
-                    tappedZone = low <= tapUpper + tapTol and low >= fvg.bottom - tapTol and close > open
-
-                    if fvg.fvgVariant == "Perfect"
-                        if tappedZone
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close > close[1] and close > open
-
-                    else if fvg.fvgVariant == "Breakaway"
-                        if bar_index == fvg.candle3_idx
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close > open
-
-                    else if fvg.fvgVariant == "Rejection"
-                        if tappedZone
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close > close[1] and volume > volume[1] * 1.1
-
-                    if entrySignal
-                        array.push(bullTriggerRef, fvg)
-                        array.push(bullEntries, bar_index)
-                        break
-
-        if not respectTrend or marketStructure == "Downtrend"
-            bearishSize = array.size(bearishFVGs)
-            if bearishSize > 0
-                for i = 0 to bearishSize - 1
-                    fvg = array.get(bearishFVGs, i)
-                    if fvg.mitigated and (na(fvg.mitigatedBar) or fvg.mitigatedBar < bar_index)
-                        continue
-                    if fvg.confluenceScore < minConfluenceScore
-                        continue
-
-                    entrySignal = false
-                    fvgCE = math.avg(fvg.top, fvg.bottom)
-                    tapLower = requireCETap ? fvgCE : fvg.bottom
-                    tappedZone = high >= tapLower - tapTol and high <= fvg.top + tapTol and close < open
-
-                    if fvg.fvgVariant == "Perfect"
-                        if tappedZone
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close < close[1] and close < open
-
-                    else if fvg.fvgVariant == "Breakaway"
-                        if bar_index == fvg.candle3_idx
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close < open
-
-                    else if fvg.fvgVariant == "Rejection"
-                        if tappedZone
-                            if entryStrategy == "Sharp Turn"
-                                entrySignal := true
-                            else if entryStrategy == "Sharp Turn + Confirmation"
-                                entrySignal := close < close[1] and volume > volume[1] * 1.1
-
-                    if entrySignal
-                        array.push(bearTriggerRef, fvg)
-                        array.push(bearEntries, bar_index)
-                        break
-    
-    [bullEntries, bearEntries]
-
 
 // ===== RISK MANAGEMENT =====
-// The partial-target lines are deleted unconditionally when a trade closes.
+// The drawn level set that travels with a fired signal. An indicator cannot
+// hold, size or exit a position, so nothing here pretends to manage one: the
+// lines are extended while the trade would still be open and deleted once price
+// has reached the stop or the final objective.
 updateRiskManagementLines() =>
     if array.size(riskLevels) > 0
         for i = array.size(riskLevels) - 1 to 0
-            riskLevel = array.get(riskLevels, i)
-            
-            if timeBasedExit and riskLevel.active
-                hoursElapsed = (time - riskLevel.entryTime) / (60 * 60 * 1000)
-                if hoursElapsed >= maxTradeHours
-                    riskLevel.active := false
-                    removePosition()
-                    line.delete(riskLevel.slLine)
-                    line.delete(riskLevel.tpLine)
-                    line.delete(riskLevel.partialLine)
-                    line.delete(riskLevel.partialLine2)
-                    line.delete(riskLevel.partialLine3)
-            
+            r = array.get(riskLevels, i)
+
             // The entry bar is excluded from the hit test. The fill is at that
             // bar's close, so the wick that tapped the array — the very move
             // that produced the signal — must not be allowed to stop the trade
             // out before it has begun.
-            if riskLevel.active and riskLevel.signalType == "BUY" and bar_index > riskLevel.entryBarIdx
-                if high >= riskLevel.tpPrice or low <= riskLevel.slPrice
-                    riskLevel.active := false
-                    removePosition()
-                    line.delete(riskLevel.slLine)
-                    line.delete(riskLevel.tpLine)
-                    line.delete(riskLevel.partialLine)
-                    line.delete(riskLevel.partialLine2)
-                    line.delete(riskLevel.partialLine3)
-            else if riskLevel.active and riskLevel.signalType == "SELL" and bar_index > riskLevel.entryBarIdx
-                if low <= riskLevel.tpPrice or high >= riskLevel.slPrice
-                    riskLevel.active := false
-                    removePosition()
-                    line.delete(riskLevel.slLine)
-                    line.delete(riskLevel.tpLine)
-                    line.delete(riskLevel.partialLine)
-                    line.delete(riskLevel.partialLine2)
-                    line.delete(riskLevel.partialLine3)
-            
-            if bar_index - riskLevel.entryBarIdx > 200 or not riskLevel.active
-                if riskLevel.active
-                    removePosition()
-                    line.delete(riskLevel.slLine)
-                    line.delete(riskLevel.tpLine)
-                    line.delete(riskLevel.partialLine)
-                    line.delete(riskLevel.partialLine2)
-                    line.delete(riskLevel.partialLine3)
+            if r.active and bar_index > r.entryBarIdx
+                isBuy = r.signalType == "BUY"
+                // The stop is tested first and on the same bar as any target, so
+                // a bar that straddles both is recorded as a loss. Intrabar order
+                // is unknowable from bar data, and the pessimistic reading is the
+                // only one that cannot flatter the engine.
+                stopped = isBuy ? low <= r.slPrice : high >= r.slPrice
+                if stopped
+                    r.slHit := true
+                else
+                    if not r.tp1Hit and (isBuy ? high >= r.partialTP : low <= r.partialTP)
+                        r.tp1Hit := true
+                    if not r.tp2Hit and (isBuy ? high >= r.partialTP2 : low <= r.partialTP2)
+                        r.tp2Hit := true
+                    if not r.tp3Hit and (isBuy ? high >= r.tpPrice : low <= r.tpPrice)
+                        r.tp3Hit := true
+                if r.slHit or r.tp3Hit
+                    r.active := false
+
+            // Record the outcome once, at the moment the trade closes or ages
+            // out, so a trade that is still running is never counted early and
+            // one that expires unresolved is still counted honestly.
+            if not r.counted and (not r.active or bar_index - r.entryBarIdx > 200)
+                r.counted := true
+                bumpPerfStat(0)
+                if r.tp1Hit
+                    bumpPerfStat(1)
+                if r.tp2Hit
+                    bumpPerfStat(2)
+                if r.tp3Hit
+                    bumpPerfStat(3)
+                if r.slHit and not r.tp1Hit
+                    bumpPerfStat(4)
+
+            if bar_index - r.entryBarIdx > 200 or not r.active
+                line.delete(r.slLine)
+                line.delete(r.tpLine)
+                line.delete(r.partialLine)
+                line.delete(r.partialLine2)
+                line.delete(r.partialLine3)
                 array.remove(riskLevels, i)
                 continue
-                
-            if breakevenStop and riskLevel.active and not riskLevel.breakevenActive
-                if riskLevel.signalType == "BUY"
-                    tpDistance = riskLevel.tpPrice - riskLevel.entryPrice
-                    breakevenLevel = riskLevel.entryPrice + (tpDistance * breakevenTrigger / 100)
-                    if high >= breakevenLevel
-                        riskLevel.breakevenActive := true
-                        newSL = riskLevel.entryPrice + syminfo.mintick * 2
-                        line.delete(riskLevel.slLine)
-                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dashed)
-                        riskLevel.slPrice := newSL
-                else if riskLevel.signalType == "SELL"
-                    tpDistance = riskLevel.entryPrice - riskLevel.tpPrice
-                    breakevenLevel = riskLevel.entryPrice - (tpDistance * breakevenTrigger / 100)
-                    if low <= breakevenLevel
-                        riskLevel.breakevenActive := true
-                        newSL = riskLevel.entryPrice - syminfo.mintick * 2
-                        line.delete(riskLevel.slLine)
-                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dashed)
-                        riskLevel.slPrice := newSL
-                
-            if trailingStop and riskLevel.active and not riskLevel.trailActive and (not breakevenStop or riskLevel.breakevenActive)
-                if riskLevel.signalType == "BUY"
-                    tpDistance = riskLevel.tpPrice - riskLevel.entryPrice
-                    trailActivationLevel = riskLevel.entryPrice + (tpDistance * trailTriggerPercent / 100)
-                    if high >= trailActivationLevel
-                        riskLevel.trailActive := true
-                        newSL = math.max(riskLevel.entryPrice, riskLevel.slPrice + (high - trailActivationLevel))
-                        line.delete(riskLevel.slLine)
-                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dotted)
-                        riskLevel.slPrice := newSL
-                else if riskLevel.signalType == "SELL"
-                    tpDistance = riskLevel.entryPrice - riskLevel.tpPrice
-                    trailActivationLevel = riskLevel.entryPrice - (tpDistance * trailTriggerPercent / 100)
-                    if low <= trailActivationLevel
-                        riskLevel.trailActive := true
-                        newSL = math.min(riskLevel.entryPrice, riskLevel.slPrice - (trailActivationLevel - low))
-                        line.delete(riskLevel.slLine)
-                        riskLevel.slLine := line.new(riskLevel.entryBarIdx, newSL, bar_index, newSL, color=slColor, width=2, style=line.style_dotted)
-                        riskLevel.slPrice := newSL
-                        
-            if riskLevel.active and riskLevel.lastBarDrawn != bar_index
-                line.set_x2(riskLevel.slLine, bar_index)
-                line.set_x2(riskLevel.tpLine, bar_index)
-                if showPartialTP
-                    line.set_x2(riskLevel.partialLine, bar_index)
-                    line.set_x2(riskLevel.partialLine2, bar_index)
-                    line.set_x2(riskLevel.partialLine3, bar_index)
-                riskLevel.lastBarDrawn := bar_index
 
-createRiskLevel(entryBar, price, isLong, fvg) =>
-    if not riskManagement
-        RiskLevels.new(entryBarIdx=entryBar, entryPrice=price, slPrice=0, tpPrice=0, partialTP=0, partialTP2=0, partialTP3=0, signalType="", lastBarDrawn=entryBar, active=false, slLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), tpLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine2=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), partialLine3=line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100)), trailActive=false, breakevenActive=false, positionSize=1.0, entryTime=time)
-    else
-        entryPrice = price
-        slPrice = 0.0
-        tpPrice = 0.0
-        partialTpPrice = 0.0
-        partialTpPrice2 = 0.0
-        partialTpPrice3 = 0.0
-        slDistance = 0.0
-        signalType = isLong ? "BUY" : "SELL"
-        
-        effectiveSLPadding = slPaddingATR * volUnit
-        
-        // Smart ATR-based SL/TP (overrides fixed padding when enabled)
-        smartSL = getSmartATRSL()
-        smartTP = getSmartATRTP()
-        
-        if isLong
-            if useSmartATR and smartSL > 0
-                slPrice := entryPrice - smartSL
-                slDistance := smartSL
-                tpPrice := entryPrice + smartTP
-            else
-                slPrice := fvg.bottom - effectiveSLPadding
-                slDistance := entryPrice - slPrice
-                tpPrice := entryPrice + (slDistance * riskReward)
-            partialTpPrice := entryPrice + (slDistance * partialTPPercent / 100)
-            partialTpPrice2 := entryPrice + (slDistance * 0.75)
-            partialTpPrice3 := entryPrice + (slDistance * 1.5)
-        else
-            if useSmartATR and smartSL > 0
-                slPrice := entryPrice + smartSL
-                slDistance := smartSL
-                tpPrice := entryPrice - smartTP
-            else
-                slPrice := fvg.top + effectiveSLPadding
-                slDistance := slPrice - entryPrice
-                tpPrice := entryPrice - (slDistance * riskReward)
-            partialTpPrice := entryPrice - (slDistance * partialTPPercent / 100)
-            partialTpPrice2 := entryPrice - (slDistance * 0.75)
-            partialTpPrice3 := entryPrice - (slDistance * 1.5)
+            if r.lastBarDrawn != bar_index
+                line.set_x2(r.slLine, bar_index)
+                line.set_x2(r.tpLine, bar_index)
+                line.set_x2(r.partialLine, bar_index)
+                line.set_x2(r.partialLine2, bar_index)
+                line.set_x2(r.partialLine3, bar_index)
+                r.lastBarDrawn := bar_index
 
-        // ── Standard deviation objectives ──
-        // The current impulse leg projected past its own extreme at 1 and 2
-        // standard deviations is a real ICT objective, so it takes over TP2/TP3
-        // whenever the leg runs the trade's way. When it does not, the
-        // R-multiples above stand as the fallback.
-        if useSDTargets and oteValid and oteDir == (isLong ? 1 : -1)
-            if isLong
-                if not na(sd10) and sd10 > entryPrice
-                    partialTpPrice2 := sd10
-                if not na(sd20) and sd20 > partialTpPrice2
-                    partialTpPrice3 := sd20
-            else
-                if not na(sd10) and sd10 < entryPrice
-                    partialTpPrice2 := sd10
-                if not na(sd20) and sd20 < partialTpPrice2
-                    partialTpPrice3 := sd20
-
-        // ── Draw on Liquidity as the final objective ──
-        // The standard-deviation projection is the leg's own measured target;
-        // the draw is where the resting orders actually are. When the draw lies
-        // in the trade's direction and beyond the SD objective, it takes over
-        // the final target, because that is the level price is being delivered
-        // towards.
-        if showDOL and not na(dolPx) and dolDir == (isLong ? 1 : -1)
-            if isLong and dolPx > partialTpPrice3
-                partialTpPrice3 := dolPx
-            else if not isLong and dolPx < partialTpPrice3
-                partialTpPrice3 := dolPx
-
-        posSize = calculatePositionSize(entryPrice, slPrice)
-        
-
-        slLine = line.new(entryBar, slPrice, bar_index, slPrice, color=slColor, width=2)
-        tpLine = line.new(entryBar, tpPrice, bar_index, tpPrice, color=tpColor, width=2)
-        
-        partialLine = showPartialTP ? 
-          line.new(entryBar, partialTpPrice, bar_index, partialTpPrice, color=partialTPColor, width=1, style=line.style_dashed) : 
-          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
-        
-        partialLine2 = showPartialTP ? 
-          line.new(entryBar, partialTpPrice2, bar_index, partialTpPrice2, color=partialTPColor, width=1, style=line.style_dotted) : 
-          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
-          
-        partialLine3 = showPartialTP ? 
-          line.new(entryBar, partialTpPrice3, bar_index, partialTpPrice3, color=partialTPColor, width=1, style=line.style_dotted) : 
-          line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
-        
-        addPosition()
-        
-        RiskLevels.new(
-          entryBarIdx=entryBar, 
-          entryPrice=entryPrice, 
-          slPrice=slPrice, 
-          tpPrice=tpPrice, 
-          partialTP=partialTpPrice,
-          partialTP2=partialTpPrice2,
-          partialTP3=partialTpPrice3,
-          signalType=signalType, 
-          lastBarDrawn=entryBar, 
-          active=true, 
-          slLine=slLine, 
-          tpLine=tpLine, 
-          partialLine=partialLine,
-          partialLine2=partialLine2,
-          partialLine3=partialLine3,
-          trailActive=false,
-          breakevenActive=false,
-          positionSize=posSize,
-          entryTime=time)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SNIPER ENGINE
 // ═══════════════════════════════════════════════════════════════════════════
 // Two stages, and the order matters. Stage A is a top-down cascade of hard
 // gates: HTF bias, intermediate array, dealing-range half, killzone, structure
-// state, liquidity taken, SMT, draw on liquidity, and finally a live array being
-// tapped.
+// state, liquidity taken, SMT, draw on liquidity, directional confluence,
+// delivery regime, and finally a live array being tapped.
+//
+// The last two are the ones that make the cascade enforce a direction. The eight
+// before them are vetoes, and vetoes multiply — arming enough of them to keep the
+// engine out of a chopping market deadlocks it in a trending one, which is why
+// all but structure ship disarmed and why in practice nothing constrained
+// direction at all. Confluence is a vote instead of a veto, so no single factor
+// can block and there is no pair to deadlock; the regime test is direction-
+// independent and simply refuses to trade a market that is rotating.
 
 // ── Gate 1: an intermediate-timeframe array pointing the same way ────────────
 // A chart-timeframe gap on its own is a local event. The intermediate term
@@ -2456,72 +2159,237 @@ liquidityTaken(int dir) =>
     jdOK = judasDir == dirStr and not na(judasBar) and bar_index - judasBar <= liqTakenWindow
     purgeOK or tsOK or jdOK
 
-// ── Gate 9: the entry trigger — a live array being tapped right now ──────────
-// Zones are searched first because they carry a real quality tier; gaps come
-// second at tier 3 if the intermediate term also sees them and tier 2 if only
-// this chart does. The tap has to reach the array's 50% mean — consequent
-// encroachment — not merely graze its far edge, and the candle has to be
-// reacting rather than slicing through.
-bestTappedArray(int dir) =>
-    bool found = false
-    float bTop = na
-    float bBot = na
-    int bTier = 0
-    string bKind = ""
-    bool bFresh = false
-    for z in zones
-        if not z.active or z.dir != dir or z.kind == "VI" or z.confirmBar == bar_index
+// ── Gate 9: the market's own state variables agree on a direction ────────────
+// Every gate above is a veto, and vetoes multiply — which is why all but
+// structure ship disarmed, and why in practice nothing enforced a direction at
+// all. The engine would take a long at the high of a leg while its own dashboard
+// reported HTF bias down, swing trend down and the draw above: four readings,
+// no two agreeing, and no mechanism that noticed.
+//
+// A vote fixes what more vetoes cannot. Each factor returns +1 for, -1 against,
+// or abstains when it has no reading — an unset HTF bias or an unresolved
+// dealing range should not vote against a trade for being unavailable. The trade
+// needs a quorum *and* a plurality, so 3-of-5 with two opposed passes while
+// 2-for-2-against never does, whatever the fifth says.
+// Each factor reduces to the direction it currently leans, or 0 for "no
+// reading". Scalar returns throughout rather than a tuple of (for, against):
+// Pine will not let a tuple-returning function be called from inside another
+// function, and both the cascade and the dashboard need these.
+confluencePD() =>
+    na(drEq) ? 0 : inDiscount ? 1 : inPremium ? -1 : 0
+
+// Where price sits in the dealing range, 0 at the low edge and 1 at the high.
+// Reuses the range the premium/discount engine already maintains rather than
+// measuring a second one. An unresolved range answers 0.5 — the middle — so a
+// chart with no range yet is treated as balanced rather than as an extreme.
+rangePos() =>
+    na(drHigh) or na(drLow) or drHigh - drLow <= 0 ? 0.5 : (close - drLow) / (drHigh - drLow)
+
+confluenceDOL() =>
+    dolDir != 0 and not na(dolPx) ? dolDir : 0
+
+// Accumulation has no directional opinion — the range has not resolved yet — so
+// it abstains rather than voting against both sides.
+confluencePO3() =>
+    po3Dir != 0 and po3Phase != "Accumulation" ? po3Dir : 0
+
+confluenceAgree(int dir) =>
+    (htfBias == dir ? 1 : 0) + (swingTrend == dir ? 1 : 0) + (confluenceDOL() == dir ? 1 : 0) + (confluencePD() == dir ? 1 : 0) + (confluencePO3() == dir ? 1 : 0)
+
+confluenceAgainst(int dir) =>
+    opp = -dir
+    (htfBias == opp ? 1 : 0) + (swingTrend == opp ? 1 : 0) + (confluenceDOL() == opp ? 1 : 0) + (confluencePD() == opp ? 1 : 0) + (confluencePO3() == opp ? 1 : 0)
+
+confluenceOK(int dir) =>
+    confluenceAgree(dir) >= minConfluence and confluenceAgree(dir) > confluenceAgainst(dir)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE ENTRY: ARM, THEN CONFIRM
+// ═══════════════════════════════════════════════════════════════════════════
+// The entry is a sequence, not a candle.
+//
+// The old trigger demanded three things on one bar: the tap, a close in the
+// trade's direction, and a close that had *not left the array*. That last
+// condition is what silenced the engine — it rejects the displacement candle
+// that reclaims the level, which is the actual ICT confirmation, and accepts
+// only candles too weak to escape the zone they bounced in. Chasing is a risk
+// problem, not a geometry one, so it is priced as one below.
+//
+// Arming records that price reached the level. Confirming records that price
+// turned there. Between them the setup carries `armExtreme`, the furthest wick
+// into the array, which is the invalidation the stop is measured from.
+
+// The entry band of an array: from its far edge to its 50% mean threshold. A
+// long is filled between the bottom of a demand zone and its consequent
+// encroachment; a short between the mean and the top of a supply zone.
+armBandLo(int dir, float bot, float mid) =>
+    (dir == 1 ? bot : mid) - tapTol
+
+armBandHi(int dir, float top, float mid) =>
+    (dir == 1 ? mid : top) + tapTol
+
+// Is an equivalent setup already armed? Two arrays whose bands sit within the
+// tap tolerance of each other are one level being tested, not two.
+alreadyArmed(int dir, float top, float bot) =>
+    bool dup = false
+    for a in armedSetups
+        if a.dir == dir and math.abs(a.top - top) <= tapTol and math.abs(a.bottom - bot) <= tapTol
+            dup := true
+            break
+    dup
+
+// How many setups are armed in a direction, and the weakest tier among them —
+// so the cap can be enforced without letting a bare gap crowd out an order
+// block.
+armedCount(int dir) =>
+    int n = 0
+    for a in armedSetups
+        if a.dir == dir
+            n += 1
+    n
+
+pushArmed(int dir, float top, float bot, int tier, string kind, bool fresh) =>
+    if not alreadyArmed(dir, top, bot)
+        // Four per side is enough for every array price can plausibly be
+        // testing at once, and bounds the update pass.
+        if armedCount(dir) >= 4
+            // Drop the weakest same-direction setup to make room for a better
+            // one; keep the incumbent if the newcomer is no better.
+            int worstIdx = -1
+            int worstTier = tier
+            nA = array.size(armedSetups)
+            if nA > 0
+                for i = 0 to nA - 1
+                    a = array.get(armedSetups, i)
+                    if a.dir == dir and a.tier < worstTier
+                        worstTier := a.tier
+                        worstIdx := i
+            if worstIdx >= 0
+                array.remove(armedSetups, worstIdx)
+        if armedCount(dir) < 4
+            bumpArmStat(0)
+            array.push(armedSetups, ArmedSetup.new(dir=dir, top=top, bottom=bot, mean=math.avg(top, bot), tier=tier, kind=kind, fresh=fresh, armBar=bar_index, armExtreme=dir == 1 ? low : high))
+
+// Gaps are tier 3 when the intermediate term left one too and tier 2 when only
+// this chart did. Taken as a parameter rather than picked with a ternary,
+// because the side has to be chosen by the caller for the collection type to
+// stay unambiguous.
+scanGapsForArms(array<FVG> gaps, int dir, float probe, float reach) =>
+    for f in gaps
+        if bar_index <= f.candle3_idx
             continue
-        tapped = dir == 1 ? (low <= z.mean + tapTol and low >= z.bottom - tapTol and close > open) : (high >= z.mean - tapTol and high <= z.top + tapTol and close < open)
-        if tapped
-            t = zoneTier(z)
-            if t > bTier
-                found := true
-                bTier := t
-                bTop := z.top
-                bBot := z.bottom
-                bKind := z.kind
-                bFresh := z.touches <= 1
-    // A gap is a tier 3 array at best, so once a zone has produced tier 3 or
-    // better the entire gap scan cannot improve on it and is skipped outright.
-    // Held as a flag rather than an early return so the tuple stays the
-    // function's single unconditional last expression.
-    scanGaps = bTier < 3
-    if scanGaps
-        if dir == 1
-            for f in bullishFVGs
-                if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
-                    continue
-                ce = math.avg(f.top, f.bottom)
-                if low <= ce + tapTol and low >= f.bottom - tapTol and close > open
-                    t = f.timeframe != timeframe.period ? 3 : 2
-                    if t > bTier
-                        found := true
-                        bTier := t
-                        bTop := f.top
-                        bBot := f.bottom
-                        bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
-                        bFresh := not f.mitigated
-                        // Tier 3 is the ceiling for a gap; nothing left to find.
-                        if bTier >= 3
-                            break
-        else
-            for f in bearishFVGs
-                if f.mitigated and (na(f.mitigatedBar) or f.mitigatedBar < bar_index)
-                    continue
-                ce = math.avg(f.top, f.bottom)
-                if high >= ce - tapTol and high <= f.top + tapTol and close < open
-                    t = f.timeframe != timeframe.period ? 3 : 2
-                    if t > bTier
-                        found := true
-                        bTier := t
-                        bTop := f.top
-                        bBot := f.bottom
-                        bKind := f.timeframe != timeframe.period ? "HTF FVG" : "FVG"
-                        bFresh := not f.mitigated
-                        if bTier >= 3
-                            break
-    [found, bTop, bBot, bTier, bKind, bFresh]
+        // A gap is spent when its far edge has been *closed through* — at which
+        // point it is an inversion facing the other way — not when price has
+        // merely touched it. Retiring on the mitigation flag was fatal here: that
+        // flag is raised at consequent encroachment, which is the very level the
+        // entry needs price to reach, so the array was being destroyed by the
+        // event that qualified it, and the classic wick-in-then-rebalance entry
+        // could never be seen.
+        if (dir == 1 ? close < f.bottom : close > f.top)
+            continue
+        mid = math.avg(f.top, f.bottom)
+        if math.abs(mid - probe) > reach
+            continue
+        if probe <= armBandHi(dir, f.top, mid) and probe >= armBandLo(dir, f.bottom, mid)
+            isHTF = f.timeframe != timeframe.period
+            pushArmed(dir, f.top, f.bottom, isHTF ? 3 : 2, isHTF ? "HTF FVG" : "FVG", not f.mitigated)
+
+// ── The arming scan ──────────────────────────────────────────────────────────
+// Runs every bar in both directions. No gate is consulted here: arming is only
+// the observation that price reached a level, and the gates decide whether the
+// trade is worth taking at the moment it confirms — which is when it would
+// actually be entered, and therefore the only moment their answers matter.
+scanForArms(int dir) =>
+    probe = dir == 1 ? low : high
+    // Anything this bar's range never came near cannot have been tapped. The
+    // check is two comparisons and it skips the band arithmetic for the great
+    // majority of a few hundred arrays every bar.
+    reach = 1.5 * volUnit
+    for z in zones
+        if not z.active or z.dir != dir or z.kind == "VI"
+            continue
+        // A zone may not be credited with a tap that predates its own
+        // confirmation.
+        if bar_index <= z.confirmBar
+            continue
+        if math.abs(z.mean - probe) > reach
+            continue
+        if probe <= armBandHi(dir, z.top, z.mean) and probe >= armBandLo(dir, z.bottom, z.mean)
+            pushArmed(dir, z.top, z.bottom, zoneTier(z), z.kind, z.touches <= 1)
+    if dir == 1
+        scanGapsForArms(bullishFVGs, 1, probe, reach)
+    else
+        scanGapsForArms(bearishFVGs, -1, probe, reach)
+
+// ── The update and confirmation pass ─────────────────────────────────────────
+// Walked once per bar. Confirmed setups are moved into the two single-element
+// buffers the main execution block reads; expiries and invalidations are
+// counted so a quiet chart can say which of the two it is.
+//
+// The four confirmation triggers are the four ways price says it has turned at
+// a level, and every one of them is already computed upstream. A reclaim of the
+// mean is the minimum; the other three are the same statement made louder.
+updateArmed(bool cisdUp, bool cisdDn, bool structUp, bool structDn, bool dispUp, bool dispDn) =>
+    array.clear(confirmedLong)
+    array.clear(confirmedShort)
+    n = array.size(armedSetups)
+    if n > 0
+        for idx = 0 to n - 1
+            i = n - 1 - idx
+            if i < 0
+                break
+            a = array.get(armedSetups, i)
+            isLong = a.dir == 1
+
+            // The wick keeps extending while the setup waits, so the stop is
+            // always measured from the deepest test the level has survived.
+            a.armExtreme := isLong ? math.min(a.armExtreme, low) : math.max(a.armExtreme, high)
+
+            // The array failed. This is the setup's real invalidation and it
+            // retires the arm immediately, whatever the window has left.
+            if (isLong ? close < a.bottom - tapTol : close > a.top + tapTol)
+                bumpArmStat(3)
+                array.remove(armedSetups, i)
+                continue
+
+            if bar_index - a.armBar > armWindow
+                bumpArmStat(2)
+                array.remove(armedSetups, i)
+                continue
+
+            // Arming and confirming on the same candle is allowed — a wick into
+            // the level that closes back through its mean is one candle doing
+            // both jobs, and it is a perfectly good entry.
+            // The mean reclaim is the weakest of the four triggers and it was
+            // also the loosest thing in the engine: any candle closing the right
+            // side of the array's 50% line counted, however small and wherever
+            // it closed in its own range. On a 3-minute chart that is roughly
+            // every other bar, so a setup sitting at a level was very nearly
+            // guaranteed to confirm somewhere inside its window — which is how
+            // 290 taps became 144 signals. A reclaim now has to look like one:
+            // a body worth the name, closing in the top (or bottom) 40% of its
+            // range rather than rolling over into the close.
+            body = math.abs(close - open)
+            rng = math.max(high - low, syminfo.mintick)
+            closeStrong = isLong ? close >= high - rng * 0.4 : close <= low + rng * 0.4
+            reclaim = (isLong ? (close > open and close > a.mean) : (close < open and close < a.mean)) and body >= confirmMinBodyATR * volUnit and closeStrong
+            trigger = reclaim or (isLong ? (cisdUp or structUp or dispUp) : (cisdDn or structDn or dispDn))
+            if trigger
+                // The only anti-chase test the engine needs. A confirmation may
+                // close as far from the array as it likes provided the stop it
+                // implies is still affordable — which is exactly what the old
+                // geometric guard got wrong.
+                if math.abs(close - a.armExtreme) <= maxStopATR * volUnit
+                    bumpArmStat(1)
+                    if isLong
+                        if array.size(confirmedLong) == 0 or a.tier > array.get(confirmedLong, 0).tier
+                            array.clear(confirmedLong)
+                            array.push(confirmedLong, a)
+                    else
+                        if array.size(confirmedShort) == 0 or a.tier > array.get(confirmedShort, 0).tier
+                            array.clear(confirmedShort)
+                            array.push(confirmedShort, a)
+                    array.remove(armedSetups, i)
 
 // ── Stage B: the weighted stack ─────────────────────────────────────────────
 sniperStack(int dir, int tier, bool fresh) =>
@@ -2539,7 +2407,11 @@ sniperStack(int dir, int tier, bool fresh) =>
     // A tier-3 order block is a solid array, not 60% of one. The tier / 5 ramp
     // charged every realistic setup a third of the largest weight in the stack
     // for the crime of not being a Unicorn.
-    tierPts = tier >= 5 ? 1.0 : tier == 4 ? 0.9 : tier == 3 ? 0.75 : tier == 2 ? 0.5 : 0.25
+    //
+    // The low end was then recalibrated downward: a bare chart-timeframe gap is
+    // the most common thing price can tap, and paying it half of the largest
+    // weight in the stack put the score floor above any threshold worth setting.
+    tierPts = tier >= 5 ? 1.0 : tier == 4 ? 0.9 : tier == 3 ? 0.75 : tier == 2 ? 0.35 : 0.15
 
     // Numerator and denominator accumulate together so a factor that cannot apply
     // leaves the scale entirely rather than scoring zero against the setup.
@@ -2550,28 +2422,39 @@ sniperStack(int dir, int tier, bool fresh) =>
     float den = wPD
     num += wArray * tierPts
     den += wArray
-    num += wFresh * (fresh ? 1.0 : 0.5)
+    num += wFresh * (fresh ? 1.0 : 0.25)
     den += wFresh
     // With the leg pointing the other way the OTE band is meaningless, not failed.
     if oteValid and oteDir == dir
         num += wOTE * (inOTEBand ? 1.0 : 0.4)
         den += wOTE
-    // Displacement is strictly defined and genuinely rare; its absence should not
-    // cost most of the weight.
-    num += wDisp * ((dir == 1 ? dispUpFresh : dispDnFresh) ? 1.0 : 0.45)
+    // Displacement is the ICT confirmation that delivery actually changed, not a
+    // bonus on top of one. Absent, it should cost nearly the whole weight.
+    num += wDisp * ((dir == 1 ? dispUpFresh : dispDnFresh) ? 1.0 : 0.15)
     den += wDisp
     num += wSeq * ((cisdOK ? 0.5 : 0.0) + (mssOK ? 0.5 : swingFresh ? 0.3 : 0.0))
     den += wSeq
     num += wVol * scoreVolume()
     den += wVol
     // No correlated partner means nothing can diverge, so SMT leaves the scale.
+    // When a partner *is* available, the absence of a divergence is neutral —
+    // not three-quarters of a confirmation, which is what 0.75 was paying for
+    // the mere fact that gold and the dollar happened to be moving normally.
     if smtAvailable
-        num += wSMT * (smtDir == dirStr ? 1.0 : smtDir == "None" ? 0.75 : 0.0)
+        num += wSMT * (smtDir == dirStr ? 1.0 : smtDir == "None" ? 0.45 : 0.0)
         den += wSMT
-    num += wTime * (inMacro ? 1.0 : inSilverBullet ? 0.9 : (inNYAMKZ or inLondonKZ) ? 0.75 : inAnyKZ ? 0.6 : 0.3)
+    // The off-killzone floor stays above zero — on an instrument that trades
+    // around the clock most of the day falls outside all four windows, and a
+    // permanent full deduction for that measures the asset class rather than the
+    // setup. But it was 0.5, which made "no timing edge at all" worth half the
+    // weight and flattened the whole factor: on gold every signal today sat in
+    // the NY AM killzone and scored 0.75 for it, so timing separated nothing.
+    num += wTime * (inMacro ? 1.0 : inSilverBullet ? 0.9 : (inNYAMKZ or inLondonKZ) ? 0.7 : inAnyKZ ? 0.5 : 0.25)
     den += wTime
     num += wDOLRoom * (dolDir == dir ? math.min(1.0, room / math.max(dolMinRoomATR * 2.0, 0.5)) : 0.0)
     den += wDOLRoom
+    num += wPO3 * scorePO3(dir)
+    den += wPO3
 
     math.round(math.max(0.0, math.min(100.0, num / math.max(den, 1.0) * 100.0)), 0)
 
@@ -2594,25 +2477,60 @@ sniperEvaluate(int dir, array<bool> g) =>
     g5 = not gateLiq or liquidityTaken(dir)
     g6 = not gateSMT or not smtAvailable or smtDir == "None" or smtDir == dirStr
     g7 = not gateDOL or (dolDir == dir and not na(dolPx) and math.abs(dolPx - close) >= dolMinRoomATR * volUnit)
-    // Every gate above is a constant-time test against cached state. The tap
-    // scan is the only one that walks collections, so the cascade short-circuits
-    // here: if anything above has already failed there is no setup to find, and
-    // several hundred iterations per direction per bar are skipped.
-    cascadeOK = g0 and g1 and g2 and g3 and g4 and g5 and g6 and g7
-    bool tapped = false
-    float aTop = na
-    float aBot = na
+    g8 = not gateConfluence or confluenceOK(dir)
+    // Direction-independent: a balancing market is a bad place to take a
+    // reversal signal either way round — but only in the middle of the range. A
+    // low-efficiency bar at the top or bottom of the dealing range is the range
+    // extreme being tested, which is where the reversal is taken; the same
+    // reading in the middle is chop with nothing resting nearby to run.
+    rPos = rangePos()
+    midRange = rPos > regimeEdgeBand and rPos < 1.0 - regimeEdgeBand
+    // ── A tried and measured failure: do not add a confluence override here ──
+    // The reasoning looked sound. Efficiency is net displacement over path, so
+    // it falls during any retracement — a pullback inside a trend shrinks the
+    // numerator while the denominator grows — which makes a continuation entry
+    // arithmetically indistinguishable from chop. So a decisive vote (one above
+    // the quorum) was allowed to stand this gate down.
+    //
+    // It was tested and it was wrong. The override added 9 signals; **none of
+    // them reached TP1 and all 9 hit the stop**, taking the sample from
+    // 38 trades at 37% TP1 to 47 at 30%, and expectancy at 1.8R from +0.04R to
+    // −0.16R.
+    //
+    // The flaw: the vote is a *state* and efficiency is a *bar-level* measure.
+    // HTF bias, chart trend, premium/discount and the draw can all hold the same
+    // reading for hours while price grinds sideways in the middle of the range —
+    // which is precisely the condition this gate exists to refuse. Overriding a
+    // fast measure with a slow one disabled the gate almost permanently whenever
+    // the market had a persistent lean, and a persistent lean plus mid-range
+    // chop is the worst thing the engine can trade. The range-edge exemption
+    // below works because *it* is positional and changes with price; a vote does
+    // not.
+    g9 = not gateRegime or deliveryER >= regimeMinER or not midRange
+    cascadeOK = g0 and g1 and g2 and g3 and g4 and g5 and g6 and g7 and g8 and g9
+    // How many gates said no. A gate that is disarmed passes unconditionally, so
+    // this only ever counts gates the user actually armed — which is what makes
+    // "failed exactly one gate" a meaningful grade rather than an artefact of
+    // how many gates happen to be switched on.
+    int failCount = (g0 ? 0 : 1) + (g1 ? 0 : 1) + (g2 ? 0 : 1) + (g3 ? 0 : 1) + (g4 ? 0 : 1) + (g5 ? 0 : 1) + (g6 ? 0 : 1) + (g7 ? 0 : 1) + (g8 ? 0 : 1) + (g9 ? 0 : 1)
+    // Gate 10 is the entry itself, and it is no longer a scan: the state machine
+    // has already done the work and either handed this direction a confirmed
+    // setup or it has not.
+    bool entered = false
     int aTier = 0
-    string aKind = ""
     bool aFresh = false
-    if cascadeOK
-        [tp, tTop, tBot, tTier, tKind, tFresh] = bestTappedArray(dir)
-        tapped := tp
-        aTop := tTop
-        aBot := tBot
-        aTier := tTier
-        aKind := tKind
-        aFresh := tFresh
+    if dir == 1
+        if array.size(confirmedLong) > 0
+            c = array.get(confirmedLong, 0)
+            entered := true
+            aTier := c.tier
+            aFresh := c.fresh
+    else
+        if array.size(confirmedShort) > 0
+            c = array.get(confirmedShort, 0)
+            entered := true
+            aTier := c.tier
+            aFresh := c.fresh
     array.set(g, 0, g0)
     array.set(g, 1, g1)
     array.set(g, 2, g2)
@@ -2621,10 +2539,18 @@ sniperEvaluate(int dir, array<bool> g) =>
     array.set(g, 5, g5)
     array.set(g, 6, g6)
     array.set(g, 7, g7)
-    array.set(g, 8, tapped)
-    allPass = cascadeOK and tapped
-    score = allPass ? sniperStack(dir, aTier, aFresh) : 0.0
-    [allPass, score, aTier, aKind, aFresh, aTop, aBot]
+    array.set(g, 8, g8)
+    array.set(g, 9, g9)
+    array.set(g, 10, entered)
+    allPass = cascadeOK and entered
+    // A B-grade candidate is scored on the identical stack. The grade reflects
+    // the missing gate, never a different or softer measurement. Structure and
+    // directional confluence are required either way — with no shift there is no
+    // reversal to trade, and a setup the market's own state variables vote
+    // against is not a smaller trade, it is the wrong trade.
+    bCandidate = not cascadeOK and entered and enableBTier and failCount == 1 and g4 and g8
+    score = (allPass or bCandidate) ? sniperStack(dir, aTier, aFresh) : 0.0
+    [allPass, score, bCandidate]
 
 // ── Which model has actually formed ─────────────────────────────────────────
 // The engine names the setup rather than emitting a bare number, because "87"
@@ -2675,8 +2601,19 @@ sniperModelName(int dir, string kind, bool fresh) =>
 // extreme, Quasimodo beyond the Head, everything with a purge behind it beyond
 // the purge wick, and the array edge is both the fallback and the floor: the
 // wider of the two is taken, because the trade is wrong if either is violated.
-sniperStop(int dir, float aTop, float aBot, string model) =>
+sniperStop(int dir, float armExtreme, float aBot, float aTop, string model) =>
     buf = math.max(slPaddingATR * volUnit, syminfo.mintick * 2)
+    // The wick that actually tested the level, floored at the array's own far
+    // edge. This is the entry's real invalidation: you are wrong when the level
+    // that filled you fails, and the deepest point it survived is where that is
+    // measured from.
+    edge = dir == 1 ? math.min(nz(armExtreme, aBot), aBot) : math.max(nz(armExtreme, aTop), aTop)
+    // Widening to a swing invalidation is only justified when that swing is the
+    // reason for the trade. A blanket fallback to the most recent purge wick —
+    // valid for sixty bars and up to the full risk budget away — was dragging
+    // the stop out on setups that had nothing to do with the purge, and then the
+    // reward:risk test refused the trade for the width the fallback had just
+    // added. Purge models widen; a plain array tap stands on its own edge.
     float ref = na
     if model == "Turtle Soup" and not na(lastTSStop)
         ref := lastTSStop
@@ -2687,28 +2624,26 @@ sniperStop(int dir, float aTop, float aBot, string model) =>
             if q.active and q.dir == dir
                 ref := q.head
                 break
-    if na(ref)
+    else if model == "ICT 2022 Model"
         ref := purgeStopRef(dir)
-    edge = dir == 1 ? aBot : aTop
-    // The array edge is the entry's own invalidation and is always valid: enter
-    // at a demand zone and you are wrong when the zone fails, not when some older
-    // purge wick five ATR below fails. Taking the wider of the two was dragging
-    // the stop out to that wick and killing the reward:risk before it was
-    // measured. The model's swing invalidation is only worth widening to while it
-    // stays inside the risk budget; past that it is a different trade at a
-    // different size.
     float chosen = edge
     if not na(ref) and (dir == 1 ? ref < edge and ref < close : ref > edge and ref > close)
         if math.abs(close - ref) <= maxStopATR * volUnit
             chosen := ref
-    dir == 1 ? chosen - buf : chosen + buf
+    sl = dir == 1 ? chosen - buf : chosen + buf
+    // The noise floor, applied last so it can only push the stop further out.
+    // Everything above answers "where is this setup wrong"; this answers "how
+    // close can a stop sit and still be measuring that rather than the spread
+    // and the next wick". A long's stop may move down but never up, so a setup
+    // whose invalidation is genuinely far away keeps its own wider stop.
+    floorPx = dir == 1 ? close - minStopATR * volUnit : close + minStopATR * volUnit
+    dir == 1 ? math.min(sl, floorPx) : math.max(sl, floorPx)
 
 // A tracked trade built from explicit prices rather than from an FVG, so the
 // invalidation-based stop and the SD/DOL objectives survive intact. TP1 and TP2
 // are always drawn here: on a sniper signal they are the objectives, not
 // optional partials.
 createSniperRisk(int entryBar, float entry, float sl, float tp1, float tp2, float tp3, bool isLong) =>
-    posSize = calculatePositionSize(entry, sl)
     slLine = line.new(entryBar, sl, bar_index, sl, color=slColor, width=2)
     tpLine = line.new(entryBar, tp3, bar_index, tp3, color=tpColor, width=2)
     p1 = line.new(entryBar, tp1, bar_index, tp1, color=partialTPColor, width=1, style=line.style_dashed)
@@ -2716,8 +2651,7 @@ createSniperRisk(int entryBar, float entry, float sl, float tp1, float tp2, floa
     // tp3 already has the solid target line above, so the third partial is a
     // placeholder the lifecycle can delete alongside the others.
     p3 = line.new(bar_index, 0, bar_index, 0, color=color.new(color.black, 100))
-    addPosition()
-    RiskLevels.new(entryBarIdx=entryBar, entryPrice=entry, slPrice=sl, tpPrice=tp3, partialTP=tp1, partialTP2=tp2, partialTP3=tp3, signalType=isLong ? "BUY" : "SELL", lastBarDrawn=entryBar, active=true, slLine=slLine, tpLine=tpLine, partialLine=p1, partialLine2=p2, partialLine3=p3, trailActive=false, breakevenActive=false, positionSize=posSize, entryTime=time)
+    RiskLevels.new(entryBarIdx=entryBar, entryPrice=entry, slPrice=sl, tpPrice=tp3, partialTP=tp1, partialTP2=tp2, partialTP3=tp3, signalType=isLong ? "BUY" : "SELL", lastBarDrawn=entryBar, active=true, slLine=slLine, tpLine=tpLine, partialLine=p1, partialLine2=p2, partialLine3=p3)
 
 // Hard cap on tracked trades. Each one owns five lines, and the array is
 // otherwise only trimmed by age or by being closed out, so a burst of signals
@@ -2725,43 +2659,24 @@ createSniperRisk(int entryBar, float entry, float sl, float tp1, float tp2, floa
 capRiskLevels() =>
     while array.size(riskLevels) > maxTrackedTrades
         r = array.shift(riskLevels)
-        if r.active
-            removePosition()
+        // A trade evicted by the drawing budget still happened, and dropping it
+        // silently would bias the result row toward whatever resolved fastest.
+        if not r.counted
+            r.counted := true
+            bumpPerfStat(0)
+            if r.tp1Hit
+                bumpPerfStat(1)
+            if r.tp2Hit
+                bumpPerfStat(2)
+            if r.tp3Hit
+                bumpPerfStat(3)
+            if r.slHit and not r.tp1Hit
+                bumpPerfStat(4)
         line.delete(r.slLine)
         line.delete(r.tpLine)
         line.delete(r.partialLine)
         line.delete(r.partialLine2)
         line.delete(r.partialLine3)
-
-// Signals are drawn against the exact zone that triggered them, captured in
-// bullTriggerRef / bearTriggerRef.
-drawEntrySignals(bullishIndices, bearishIndices) =>
-    sess = getCurrentSession()
-    sessShort = inMacro ? "MACRO" : inSilverBullet ? "SB" : sess == "London/NY Overlap" ? "LN/NY" : sess == "NY AM KZ" ? "NYAM" : sess == "London KZ" ? "LDN" : sess == "London Close" ? "LNCL" : sess == "Asia KZ" ? "ASIA" : "OFF"
-    pdTag = na(drEq) ? "" : close < drEq ? " | DISC" : " | PREM"
-    // The draw on liquidity is the objective the trade is actually being taken
-    // for, so it travels on the signal label rather than only on the dashboard.
-    dolTag = na(dolPx) ? "" : "\nDOL " + (dolDir == 1 ? "▲ " : "▼ ") + dolName
-
-    if array.size(bullishIndices) > 0 and array.includes(bullishIndices, bar_index) and array.size(bullTriggerRef) > 0
-        trigFVG = array.get(bullTriggerRef, 0)
-        stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        tipText = stars + "  " + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
-        labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.green, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(0, 180, 100), 10) : color.new(color.rgb(100, 160, 80), 20)
-        label.new(bar_index, low - tapTol, "buy", style=label.style_label_up, color=labelColor, textcolor=color.white, size=size.tiny, tooltip=tipText)
-        if riskManagement
-            newRiskLevel = createRiskLevel(bar_index, close, true, trigFVG)
-            array.push(riskLevels, newRiskLevel)
-
-    if array.size(bearishIndices) > 0 and array.includes(bearishIndices, bar_index) and array.size(bearTriggerRef) > 0
-        trigFVG = array.get(bearTriggerRef, 0)
-        stars = trigFVG.confluenceScore >= 70 ? "★★★" : trigFVG.confluenceScore >= 45 ? "★★" : "★"
-        tipText = stars + "  " + str.tostring(trigFVG.confluenceScore, "#") + " | " + trigFVG.fvgVariant + "\n" + sessShort + pdTag + dolTag
-        labelColor = trigFVG.confluenceScore >= 70 ? color.new(color.red, 0) : trigFVG.confluenceScore >= 45 ? color.new(color.rgb(200, 50, 50), 10) : color.new(color.rgb(180, 80, 80), 20)
-        label.new(bar_index, high + tapTol, "sell", style=label.style_label_down, color=labelColor, textcolor=color.white, size=size.tiny, tooltip=tipText)
-        if riskManagement
-            newRiskLevel = createRiskLevel(bar_index, close, false, trigFVG)
-            array.push(riskLevels, newRiskLevel)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
@@ -2773,7 +2688,33 @@ drawEntrySignals(bullishIndices, bearishIndices) =>
 
 // When nothing fires, the one thing worth knowing is which gate said no.
 firstBlockedGate(array<bool> g) =>
-    not array.get(g, 0) ? "HTF Bias" : not array.get(g, 1) ? "ITF Array" : not array.get(g, 2) ? "PD Range" : not array.get(g, 3) ? "Killzone" : not array.get(g, 4) ? "Structure" : not array.get(g, 5) ? "Liquidity" : not array.get(g, 6) ? "SMT" : not array.get(g, 7) ? "DOL" : not array.get(g, 8) ? "No tap" : "—"
+    not array.get(g, 0) ? "HTF Bias" : not array.get(g, 1) ? "ITF Array" : not array.get(g, 2) ? "PD Range" : not array.get(g, 3) ? "Killzone" : not array.get(g, 4) ? "Structure" : not array.get(g, 5) ? "Liquidity" : not array.get(g, 6) ? "SMT" : not array.get(g, 7) ? "DOL" : not array.get(g, 8) ? "Confluence" : not array.get(g, 9) ? "Balance" : not array.get(g, 10) ? "No entry" : "—"
+
+// ── Gate diagnostics ───────────────────────────────────────────────────────
+// Short names for the counter row, in cascade index order.
+gateShortName(int i) =>
+    i == 0 ? "HTF" : i == 1 ? "ITF" : i == 2 ? "PD" : i == 3 ? "KZ" : i == 4 ? "Struct" : i == 5 ? "Liq" : i == 6 ? "SMT" : i == 7 ? "DOL" : i == 8 ? "Confl" : i == 9 ? "Balance" : "Entry"
+
+// The entry is not a switchable gate — it is the trigger itself and is always
+// required — so index 10 reports as permanently armed.
+gateArmed(int i) =>
+    i == 0 ? gateHTF : i == 1 ? gateITF : i == 2 ? gatePD : i == 3 ? gateKZ : i == 4 ? gateStruct : i == 5 ? gateLiq : i == 6 ? gateSMT : i == 7 ? gateDOL : i == 8 ? gateConfluence : i == 9 ? gateRegime : true
+
+// Every armed gate and what it has rejected, both directions summed, in cascade
+// order. This is the row that makes a deadlock visible: a gate holding a five-
+// figure count while the setup tally sits in the dozens is the thing to disarm,
+// and no amount of threshold tuning will substitute for disarming it.
+// Listing every armed gate rather than ranking the worst few is deliberate:
+// there are at most nine, usually two or three, so the row stays short — and a
+// gate that appears here at all is a gate that is armed, which makes one
+// switched on by accident visible without a separate legend.
+gateBlockReport() =>
+    string outTxt = ""
+    for i = 0 to 10
+        if gateArmed(i)
+            c = array.get(gateBlockL, i) + array.get(gateBlockS, i)
+            outTxt := outTxt + (outTxt == "" ? "" : "  ·  ") + gateShortName(i) + " " + str.tostring(c)
+    outTxt == "" ? "nothing blocked yet" : outTxt
 
 updateStatusTable() =>
     if uiRedraw and showStatusTable
@@ -2785,10 +2726,16 @@ updateStatusTable() =>
         dimText = color.rgb(160, 160, 180)
         brightText = color.white
 
-        var table dash = table.new(position.top_right, 2, 5, bgcolor=headerBG, border_width=0, frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
+        var table dash = table.new(position.top_right, 2, 5 + (showDiagnostics ? 3 : 0) + (showPerf ? 1 : 0), bgcolor=headerBG, border_width=0, frame_width=1, frame_color=color.new(color.rgb(60, 60, 80), 0))
 
         // ── Bias: chart structure, and the higher timeframe standing behind it ──
-        biasTxt = marketStructure + (htfBias == 1 ? "  ·  HTF ▲" : htfBias == -1 ? "  ·  HTF ▼" : "  ·  HTF —")
+        // The chart trend is labelled as such rather than presented as "the"
+        // trend. It is built from chart-timeframe pivots and a 3-minute and a
+        // 5-minute chart will genuinely disagree about it — that is a real
+        // difference in what each chart can see, and it should read as one
+        // instead of looking like the indicator contradicting itself.
+        chartTxt = marketStructure == "Uptrend" ? "Chart ▲" : marketStructure == "Downtrend" ? "Chart ▼" : "Chart —"
+        biasTxt = chartTxt + (htfBias == 1 ? "  ·  HTF ▲" : htfBias == -1 ? "  ·  HTF ▼" : "  ·  HTF —") + "  ·  vote ▲" + str.tostring(confluenceAgree(1)) + " ▼" + str.tostring(confluenceAgree(-1))
         biasBG = marketStructure == "Uptrend" ? accentGreen : marketStructure == "Downtrend" ? accentRed : color.new(color.gray, 30)
         table.cell(dash, 0, 0, syminfo.ticker, text_color=accentGold, bgcolor=headerBG, text_size=size.normal, text_halign=text.align_left)
         table.cell(dash, 1, 0, biasTxt, text_color=brightText, bgcolor=biasBG, text_size=size.normal, text_halign=text.align_center)
@@ -2843,6 +2790,44 @@ updateStatusTable() =>
             sigTxt := "blocked: " + (bL == bS ? bL : "▲" + bL + "  ▼" + bS) + lastTag + tally
         table.cell(dash, 0, 4, "Signal", text_color=dimText, bgcolor=labelBG, text_size=size.small, text_halign=text.align_left)
         table.cell(dash, 1, 4, sigTxt, text_color=sigFG, bgcolor=sigBG, text_size=size.small, text_halign=text.align_center)
+
+        // ── Diagnostics ──
+        // Naming the gate that blocked this one candle explains a candle. These
+        // three rows explain the chart: what has been rejecting bars all along,
+        // what became of every level price actually reached, and what happened to
+        // the setups that cleared everything and still did not fire. Read them in
+        // that order before touching any threshold.
+        if showDiagnostics
+            table.cell(dash, 0, 5, "Gates", text_color=dimText, bgcolor=labelBG, text_size=size.tiny, text_halign=text.align_left)
+            table.cell(dash, 1, 5, gateBlockReport(), text_color=dimText, bgcolor=headerBG, text_size=size.tiny, text_halign=text.align_center)
+            // Where setups went once price actually reached a level. "expired"
+            // is price sitting at the array and never turning; "voided" is the
+            // array failing outright. Neither is the engine refusing a trade,
+            // and telling them apart is what separates a quiet market from a
+            // broken filter.
+            armTxt = "armed " + str.tostring(array.get(armStats, 0)) + " → conf " + str.tostring(array.get(armStats, 1)) + " · exp " + str.tostring(array.get(armStats, 2)) + " · void " + str.tostring(array.get(armStats, 3))
+            table.cell(dash, 0, 6, "Entries", text_color=dimText, bgcolor=labelBG, text_size=size.tiny, text_halign=text.align_left)
+            table.cell(dash, 1, 6, armTxt, text_color=dimText, bgcolor=headerBG, text_size=size.tiny, text_halign=text.align_center)
+            // `floor` is not a rejection and is separated from the others by a
+            // slash for that reason: it counts confirmed setups whose stop came
+            // from the noise floor rather than from their own invalidation.
+            rejTxt = "score " + str.tostring(rejScore) + " · RR " + str.tostring(rejRR) + " · cool " + str.tostring(rejCooldown) + " · budget " + str.tostring(rejBudget) + " / floor " + str.tostring(floorCount) + (enableBTier ? "  |  B " + str.tostring(bTierCount) : "")
+            table.cell(dash, 0, 7, "Rejects", text_color=dimText, bgcolor=labelBG, text_size=size.tiny, text_halign=text.align_left)
+            table.cell(dash, 1, 7, rejTxt, text_color=dimText, bgcolor=headerBG, text_size=size.tiny, text_halign=text.align_center)
+
+        // ── What the signals actually did ──────────────────────────────────
+        // The row that turns tuning from an argument into a measurement. Every
+        // number here is first-touch and assumes no management, so it reports
+        // the engine's edge rather than a position-sizing policy.
+        if showPerf
+            perfRow = showDiagnostics ? 8 : 5
+            nClosed = array.get(perfStats, 0)
+            // The 100.0 is load-bearing: Pine's `/` on two ints is integer
+            // division, so every one of these percentages would floor to 0 or 1.
+            perfTxt = nClosed == 0 ? "no closed signals yet" : "n " + str.tostring(nClosed) + " · TP1 " + str.tostring(math.round(array.get(perfStats, 1) * 100.0 / nClosed)) + "% · TP2 " + str.tostring(math.round(array.get(perfStats, 2) * 100.0 / nClosed)) + "% · TP3 " + str.tostring(math.round(array.get(perfStats, 3) * 100.0 / nClosed)) + "% · SL " + str.tostring(math.round(array.get(perfStats, 4) * 100.0 / nClosed)) + "%"
+            perfBG = nClosed == 0 ? headerBG : array.get(perfStats, 1) * 2 >= nClosed ? color.new(accentGreen, 70) : color.new(accentRed, 70)
+            table.cell(dash, 0, perfRow, "Result", text_color=dimText, bgcolor=labelBG, text_size=size.tiny, text_halign=text.align_left)
+            table.cell(dash, 1, perfRow, perfTxt, text_color=dimText, bgcolor=perfBG, text_size=size.tiny, text_halign=text.align_center)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELIVERY RUN TRACKER
@@ -2925,7 +2910,9 @@ pushPivot(int idx, float price, bool isHigh) =>
             array.push(swingPoints, SwingPoint.new(index=idx, price=price, isHigh=isHigh))
     else
         array.push(swingPoints, SwingPoint.new(index=idx, price=price, isHigh=isHigh))
-    while array.size(swingPoints) > 60
+    // Quasimodo matches over the last three pivots and nothing else reads this
+    // list, so a handful of headroom above that is the whole requirement.
+    while array.size(swingPoints) > 8
         array.shift(swingPoints)
 
 // ── Register new swing pivots ──
@@ -3110,7 +3097,6 @@ if bullCISD
     lastCISDDir := "Bullish"
     lastCISDBar := bar_index
     lastCISDLevel := dnRunOpen
-    lastCISDDisplaced := cisdDisplaced
 
 if bearCISD
     upRunBroken := true
@@ -3118,7 +3104,6 @@ if bearCISD
     lastCISDDir := "Bearish"
     lastCISDBar := bar_index
     lastCISDLevel := upRunOpen
-    lastCISDDisplaced := cisdDisplaced
 
 while array.size(cisdEvents) > 30
     array.shift(cisdEvents)
@@ -3218,19 +3203,49 @@ if canDetect
 // ═══════════════════════════════════════════════════════════════════════════
 // DEALING RANGE — PREMIUM / DISCOUNT / EQUILIBRIUM
 // ═══════════════════════════════════════════════════════════════════════════
-// The range runs from the most recent confirmed swing low to the most recent
-// confirmed swing high, expanding with price while it trades beyond either edge.
-// Equilibrium is the 50% mark: ICT only buys in discount and sells in premium.
-if canDetect and not na(swingPH)
-    drHigh := swingPH
-if canDetect and not na(swingPL)
-    drLow := swingPL
+// The range runs between two edges chosen by the source setting, expanding with
+// price while it trades beyond either. Equilibrium is the 50% mark: ICT only
+// buys in discount and sells in premium.
+//
+// The anchor. Chart swings make the range a property of the chart rather than of
+// the market: at the default pivot length a 3-minute chart spans 36 minutes and a
+// 5-minute chart an hour, so the two report opposite halves for the same
+// instrument at the same moment — and each then feeds a 12-point stack weight and
+// an optional veto off that contradiction. The HTF source resolves the same range
+// on every chart timeframe, in the non-repainting form the HTF bias already uses.
+if drSource == "HTF Range"
+    if canDetect and not na(drHTFHi)
+        drHigh := drHTFHi
+    if canDetect and not na(drHTFLo)
+        drLow := drHTFLo
+else if drSource == "Session Range"
+    if canDetect and not na(dayHi)
+        drHigh := dayHi
+    if canDetect and not na(dayLo)
+        drLow := dayLo
+else
+    if canDetect and not na(swingPH)
+        drHigh := swingPH
+    if canDetect and not na(swingPL)
+        drLow := swingPL
 // Expand with price while it trades beyond an edge, gated so the range cannot
 // shift on the forming bar and then snap back.
 if canDetect and not na(drHigh) and high > drHigh
     drHigh := high
 if canDetect and not na(drLow) and low < drLow
     drLow := low
+
+// The chart-local impulse leg, built exactly the way the dealing range used to
+// be, so OTE and the standard-deviation projections keep their original meaning
+// whichever source the range above is drawn from.
+if canDetect and not na(swingPH)
+    legHigh := swingPH
+if canDetect and not na(swingPL)
+    legLow := swingPL
+if canDetect and not na(legHigh) and high > legHigh
+    legHigh := high
+if canDetect and not na(legLow) and low < legLow
+    legLow := low
 
 drEq := na(drHigh) or na(drLow) ? na : math.avg(drHigh, drLow)
 inPremium := not na(drEq) and close > drEq
@@ -3240,14 +3255,14 @@ inDiscount := not na(drEq) and close < drEq
 // OTE AND STANDARD DEVIATION PROJECTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 // The impulse leg runs from the older of the two live swing anchors to the
-// newer, and it is measured off the dealing range's own edges so the extreme
+// newer, and it is measured off its own chart-local extremes so the extreme
 // keeps extending while price is still delivering into it. Retracements at 0.62
 // / 0.705 / 0.79 back from the extreme are the Optimal Trade Entry band.
 legIsUp = nz(swingHighBar, -1) >= nz(swingLowBar, -1)
-oteValid := not na(drHigh) and not na(drLow) and (drHigh - drLow) >= oteMinLegATR * volUnit
+oteValid := not na(legHigh) and not na(legLow) and (legHigh - legLow) >= oteMinLegATR * volUnit
 oteDir := legIsUp ? 1 : -1
-oteAnchor := legIsUp ? drLow : drHigh
-oteExtreme := legIsUp ? drHigh : drLow
+oteAnchor := legIsUp ? legLow : legHigh
+oteExtreme := legIsUp ? legHigh : legLow
 legRange = oteExtreme - oteAnchor
 ote62 := oteValid ? oteExtreme - legRange * 0.620 : na
 ote705 := oteValid ? oteExtreme - legRange * 0.705 : na
@@ -3433,6 +3448,10 @@ if canDetect and showDOL
     dolBelowScore := 0.0
     dolBelowPx := na
     dolBelowName := ""
+    dolNearAbovePx := na
+    dolNearBelowPx := na
+    dolNearAboveName := ""
+    dolNearBelowName := ""
 
     for lv in liqLevels
         // The side test comes first. A level price has already traded through is
@@ -3442,8 +3461,8 @@ if canDetect and showDOL
             isEQ = lv.strength >= eqMinStrength
             lvW = isEQ ? 20.0 : lv.major ? 12.0 : 6.0
             lvSc = poolMagnetism(lv.price, lv.isHigh, lvW, bar_index - nz(lv.firstBar, lv.barIdx), lv.strength)
+            lvNm = isEQ ? (lv.isHigh ? "EQH" : "EQL") : lv.major ? (lv.isHigh ? "Swing High" : "Swing Low") : (lv.isHigh ? "Int High" : "Int Low")
             if lvSc > (lv.isHigh ? dolAboveScore : dolBelowScore)
-                lvNm = isEQ ? (lv.isHigh ? "EQH" : "EQL") : lv.major ? (lv.isHigh ? "Swing High" : "Swing Low") : (lv.isHigh ? "Int High" : "Int Low")
                 if lv.isHigh
                     dolAboveScore := lvSc
                     dolAbovePx := lv.price
@@ -3452,6 +3471,19 @@ if canDetect and showDOL
                     dolBelowScore := lvSc
                     dolBelowPx := lv.price
                     dolBelowName := lvNm
+            // The nearest *meaningful* pool, tracked independently of the
+            // ranking. Minor internal pivots are excluded deliberately: there is
+            // almost always one a few ticks away on a 3-minute chart, and
+            // treating every one as an obstacle would refuse every trade. An
+            // equal-highs cluster or a major swing is something price has to
+            // deliver into; a lone fast pivot is not.
+            if (isEQ or lv.major) and math.abs(lv.price - close) > tapTol
+                if lv.isHigh and (na(dolNearAbovePx) or lv.price < dolNearAbovePx)
+                    dolNearAbovePx := lv.price
+                    dolNearAboveName := lvNm
+                else if not lv.isHigh and (na(dolNearBelowPx) or lv.price > dolNearBelowPx)
+                    dolNearBelowPx := lv.price
+                    dolNearBelowName := lvNm
 
     // Fixed reference levels. Weighted by how much of the market is watching
     // them: a previous month extreme is a far larger pool than yesterday's high.
@@ -3480,6 +3512,16 @@ if canDetect and showDOL
             // Reference levels are pools by construction, so they enter the
             // cluster term at strength 2 rather than as a single order.
             rSc = poolMagnetism(rPx, rHi, array.get(refW, i), array.get(refAge, i), 2)
+            // Reference levels are obstacles whether or not they win the ranking,
+            // so the nearest-pool test sees them regardless of magnetism — PDH is
+            // in the way even on a day when the ranking prefers PWH beyond it.
+            if math.abs(rPx - close) > tapTol
+                if rHi and (na(dolNearAbovePx) or rPx < dolNearAbovePx)
+                    dolNearAbovePx := rPx
+                    dolNearAboveName := array.get(refNm, i)
+                else if not rHi and (na(dolNearBelowPx) or rPx > dolNearBelowPx)
+                    dolNearBelowPx := rPx
+                    dolNearBelowName := array.get(refNm, i)
             if rSc > 0
                 if rHi and rSc > dolAboveScore
                     dolAboveScore := rSc
@@ -3508,13 +3550,7 @@ if canDetect and showDOL
 
 // ===== MAIN CODE EXECUTION =====
 
-// 1. Update daily loss counter
-shouldResetDaily = resetDailyLoss()
-if shouldResetDaily
-    dailyLoss := 0.0
-    lastDayReset := dayofweek
-
-// 2. Killzone / macro / Silver Bullet background shading
+// 1. Killzone / macro / Silver Bullet background shading
 sessionBG = (showSessions and showSessionBG) ? getSessionBGColor() : na
 bgcolor(sessionBG)
 
@@ -3604,45 +3640,108 @@ if canDetect and showUnicorn
             unicornFormedDir := z.dir
             break
 
-// 7d. SNIPER ENGINE — the primary signal path.
+// 7d. THE ENTRY STATE MACHINE, THEN THE SNIPER ENGINE.
+// Order matters here. Arming records levels price reached on this bar; the
+// update pass then ages every armed setup, retires the ones whose array failed
+// or whose window ran out, and promotes any that confirmed. Only after that does
+// the engine ask whether a confirmed setup is worth taking — which is correct,
+// because the gates describe the market at the moment of entry, and the moment
+// of entry is the confirmation, not the tap that preceded it.
+if canDetect
+    scanForArms(1)
+    scanForArms(-1)
+    // A bare internal break is not a confirmation. At internalLen 5 on a 3-minute
+    // chart these flip direction every few bars, so passing them straight through
+    // made the structure trigger fire almost continuously in both directions at
+    // once. A swing break still counts on its own; an internal one has to carry
+    // displacement, which is the difference between price rotating through a
+    // minor pivot and price being delivered through it.
+    updateArmed(bullCISD, bearCISD, bullBreakSwing or (intBullBreak and dispUpRecent), bearBreakSwing or (intBearBreak and dispDnRecent), displacementUp, displacementDn)
+
 sniperFired = false
 if canDetect and enableSniper
+    // The budget is per killzone window, not rolling: reset it whenever a new
+    // window opens so the count reads "signals taken in this NY AM session".
+    curKZWindow = getCurrentSession()
+    if curKZWindow != kzBudgetWindow
+        kzBudgetWindow := curKZWindow
+        kzSignalCount := 0
     watchModelL := ""
     watchModelS := ""
     watchScoreL := 0.0
     watchScoreS := 0.0
-    [okL, scL, tierL, kindL, freshL, topL, botL] = sniperEvaluate(1, gateL)
-    [okS, scS, tierS, kindS, freshS, topS, botS] = sniperEvaluate(-1, gateS)
-    // Both directions passing every gate at once should not happen — the
-    // dealing-range and HTF-bias gates alone are mutually exclusive — but if the
-    // user has disarmed enough of them that it can, the higher stack score wins
-    // rather than the engine firing two opposing trades on one candle.
-    sniperEvalBars += 1
+    [okL, scL, bcL] = sniperEvaluate(1, gateL)
+    [okS, scS, bcS] = sniperEvaluate(-1, gateS)
+    // ── Gate diagnostics ───────────────────────────────────────────────────
+    // Every armed gate that failed is counted, not merely the first. Reporting
+    // only the first failure is what hid the real blocker: a gate downstream of
+    // a permanently-failing one never gets to report itself, so a deadlocked
+    // pair looks like a single stubborn gate. The entry is the exception — it is
+    // only meaningful once the cascade above it has passed, so counting it on
+    // bars where nothing was even armed would swamp the row with noise.
+    if showDiagnostics
+        cascL = true
+        cascS = true
+        for gi = 0 to 9
+            if not array.get(gateL, gi)
+                array.set(gateBlockL, gi, array.get(gateBlockL, gi) + 1)
+                cascL := false
+            if not array.get(gateS, gi)
+                array.set(gateBlockS, gi, array.get(gateBlockS, gi) + 1)
+                cascS := false
+        if cascL and not array.get(gateL, 10)
+            array.set(gateBlockL, 10, array.get(gateBlockL, 10) + 1)
+        if cascS and not array.get(gateS, 10)
+            array.set(gateBlockS, 10, array.get(gateBlockS, 10) + 1)
+    // Both directions confirming at once should not happen — an armed long and
+    // an armed short need opposite confirmations on one candle — but if it does,
+    // the higher stack score wins rather than the engine firing two opposing
+    // trades on the same bar.
     if okL or okS
         cascadePassBars += 1
-        bestScoreSeen := math.max(bestScoreSeen, math.max(scL, scS))
-    takeLong = okL and (not okS or scL >= scS)
+        // Only a direction that actually passed may raise the observed ceiling.
+        // A B-grade score is a real number on the same scale but it never
+        // cleared the cascade, so letting it set the bar the A+ threshold is
+        // tuned against would quietly inflate it.
+        bestScoreSeen := math.max(bestScoreSeen, math.max(okL ? scL : 0.0, okS ? scS : 0.0))
+    // A+ always wins. B grade is only considered on bars where neither direction
+    // produced a full cascade pass, so the two can never compete for one candle.
+    aPlus = okL or okS
+    bOnly = not aPlus and enableBTier and (bcL or bcS)
+    takeLong = aPlus ? (okL and (not okS or scL >= scS)) : (bcL and (not bcS or scL >= scS))
     sDir = takeLong ? 1 : -1
-    sOK = takeLong ? okL : okS
+    sOK = aPlus or bOnly
     sScore = takeLong ? scL : scS
     if sOK
-        sKind = takeLong ? kindL : kindS
-        sFresh = takeLong ? freshL : freshS
-        sTop = takeLong ? topL : topS
-        sBot = takeLong ? botL : botS
-        [sModel, sNarr] = sniperModelName(sDir, sKind, sFresh)
+        ArmedSetup setup = na
+        if takeLong
+            setup := array.get(confirmedLong, 0)
+        else
+            setup := array.get(confirmedShort, 0)
+        [sModel, sNarr] = sniperModelName(sDir, setup.kind, setup.fresh)
         sEntry = close
-        sSL = sniperStop(sDir, sTop, sBot, sModel)
+        sSL = sniperStop(sDir, setup.armExtreme, setup.bottom, setup.top, sModel)
         sRisk = math.abs(sEntry - sSL)
-        // A stop tighter than a tenth of the volatility unit is not a stop, it
-        // is a rounding error, and the R multiples built on it would be fiction.
-        if sRisk >= 0.10 * volUnit
+        // A safety net only, and it can no longer fail by construction:
+        // sniperStop() enforces the same floor, so every stop it returns already
+        // clears this. It is kept because a na or degenerate price would still
+        // be caught here, not because it is expected to reject anything.
+        stopUsable = sRisk >= minStopATR * volUnit
+        if not stopUsable
+            rejStop += 1
+        // The number that *is* worth counting. When the final risk lands exactly
+        // on the floor, the setup's own invalidation was tighter than the noise
+        // and the floor set the stop rather than the structure. A high count
+        // means the arrays being traded are too small for the instrument, which
+        // is a zone-quality problem and is fixed by raising Min Impulse Leg Size
+        // — not by moving the floor again.
+        if stopUsable and math.abs(sRisk - minStopATR * volUnit) < syminfo.mintick * 2
+            floorCount += 1
+        if stopUsable
             // ── Objectives ──
-            // The standard-deviation projections are the leg's own measured
-            // targets and take precedence over R multiples whenever the leg runs
-            // the trade's way; the draw on liquidity then takes the final one,
-            // because that is where the orders this trade is being taken for are
-            // actually resting. R multiples are the fallback throughout.
+            // TP1 and TP2 are the current leg's own standard-deviation
+            // projections whenever that leg runs the trade's way, and R
+            // multiples when it does not.
             sdUsable = oteValid and oteDir == sDir
             float sT1 = sDir == 1 ? sEntry + sRisk : sEntry - sRisk
             if sdUsable and not na(sd05) and (sDir == 1 ? sd05 > sT1 : sd05 < sT1)
@@ -3650,15 +3749,84 @@ if canDetect and enableSniper
             float sT2 = sDir == 1 ? sEntry + sRisk * 2.0 : sEntry - sRisk * 2.0
             if sdUsable and not na(sd10) and (sDir == 1 ? sd10 > sT2 : sd10 < sT2)
                 sT2 := sd10
-            float sT3 = sDir == 1 ? sEntry + sRisk * 3.0 : sEntry - sRisk * 3.0
-            if sdUsable and not na(sd20) and (sDir == 1 ? sd20 > sT3 : sd20 < sT3)
+            // ── The final objective, and the reward:risk measured to it ──
+            // Always the best pool lying in the trade's *own* direction, whether
+            // or not it won the draw-on-liquidity ranking.
+            //
+            // The previous version substituted the draw only when it already
+            // pointed the trade's way, and otherwise left the target at a
+            // synthetic 3R. That inverted the whole test: a trade aligned with
+            // the draw got a real, measurable objective and could be refused for
+            // falling short of it, while a trade fighting the draw kept a
+            // fictional 3R it had done nothing to earn and passed every time. The
+            // gate was rejecting the best setups and waving through the worst.
+            //
+            // A short in a market being delivered upward now measures to the
+            // nearest pool below — which is genuinely all it can expect — earns a
+            // low R, and is correctly downgraded or refused.
+            alignedPool = sDir == 1 ? dolAbovePx : dolBelowPx
+            float sT3 = na
+            if not na(alignedPool) and (sDir == 1 ? alignedPool > sEntry : alignedPool < sEntry)
+                sT3 := alignedPool
+            else if sdUsable and not na(sd20) and (sDir == 1 ? sd20 > sEntry : sd20 < sEntry)
                 sT3 := sd20
-            if not na(dolPx) and dolDir == sDir and (sDir == 1 ? dolPx > sT2 : dolPx < sT2)
-                sT3 := dolPx
-            sRR = math.abs(sT3 - sEntry) / sRisk
-            cooled = na(lastSniperBar) or bar_index - lastSniperBar >= sniperCooldown
+            if na(sT3)
+                sT3 := sDir == 1 ? sEntry + sRisk * 3.0 : sEntry - sRisk * 3.0
+            // The first pool standing in the way becomes TP1 whenever it is
+            // nearer than the leg's own projection. Price has to deliver into it
+            // before anything beyond it is reachable, so calling it the first
+            // objective is simply describing what happens next.
+            nearestPool = sDir == 1 ? dolNearAbovePx : dolNearBelowPx
+            poolAhead = not na(nearestPool) and (sDir == 1 ? nearestPool > sEntry : nearestPool < sEntry)
+            if poolAhead
+                sT1 := sDir == 1 ? math.min(sT1, nearestPool) : math.max(sT1, nearestPool)
+            // The final objective is a real level, and it can sit nearer than the
+            // leg's own projections do. When it does, the earlier targets belong
+            // inside it rather than beyond it — a TP2 past the level the trade is
+            // being taken to is not a partial, it is a target that will never be
+            // reached.
+            if sDir == 1
+                sT2 := math.min(sT2, sT3)
+                sT1 := math.min(sT1, sT2)
+            else
+                sT2 := math.max(sT2, sT3)
+                sT1 := math.max(sT1, sT2)
 
-            if sScore >= aPlusThreshold and sRR >= minSignalRR and cooled and not isMaxPositionsReached()
+            // ── The reward, measured to the first obstacle ──
+            // The draw-on-liquidity ranking scores pools by magnetism, so on gold
+            // it names a weekly high thirty points away while an equal-highs
+            // cluster sits four points above the entry. Measuring the reward to
+            // the far pool credited setups with 15R when their realistic
+            // objective was 1.5R, and that is why a 1.8 minimum never rejected
+            // anything. The drawn TP3 still points at the real level — only the
+            // test is honest about what has to happen first.
+            float rrTarget = sT3
+            if rrTargetMode == "Nearest Pool" and poolAhead
+                rrTarget := sDir == 1 ? math.min(sT3, nearestPool) : math.max(sT3, nearestPool)
+            // A backstop for the case where nothing is resting in between: a
+            // daily or weekly level tens of ATR away is not an intraday reward.
+            rrCap = rrTargetCapATR * volUnit
+            if math.abs(rrTarget - sEntry) > rrCap
+                rrTarget := sDir == 1 ? sEntry + rrCap : sEntry - rrCap
+            sRR = math.abs(rrTarget - sEntry) / sRisk
+
+            // Cooldowns were per direction only, so a BUY and a SELL could print
+            // on consecutive bars — which is what a chopping market produces and
+            // what no trader would take. The opposite side now has to wait too.
+            lastFire = takeLong ? lastSniperBarL : lastSniperBarS
+            lastOpp = takeLong ? lastSniperBarS : lastSniperBarL
+            flipBars = int(math.round(sniperCooldown * flipCooldownMult))
+            cooled = (na(lastFire) or bar_index - lastFire >= sniperCooldown) and (flipBars <= 0 or na(lastOpp) or bar_index - lastOpp >= flipBars)
+            // The session budget. The fourth setup inside one NY AM window is
+            // rarely better than the first three; far more often it is the
+            // market having stopped trending and started rotating.
+            budgetOK = maxSignalsPerKZ <= 0 or kzSignalCount < maxSignalsPerKZ
+
+            if aPlus and sScore >= aPlusThreshold and sRR >= minSignalRR and cooled and budgetOK
+                if takeLong
+                    lastSniperBarL := bar_index
+                else
+                    lastSniperBarS := bar_index
                 lastSniperBar := bar_index
                 sniperDir := sDir
                 sniperModel := sModel
@@ -3672,25 +3840,56 @@ if canDetect and enableSniper
                 sniperRR := sRR
                 sniperFired := true
                 signalCount += 1
+                kzSignalCount += 1
                 sCol = sDir == 1 ? sniperBullColor : sniperBearColor
-                // A flag, not an essay. Four lines of narrative per signal at
-                // normal size overlapped into an unreadable block wherever
-                // signals clustered, which made a hundred and fifty of them look
-                // like two. The reasoning lives in the tooltip, one hover away.
-                sTip = sModel + "\n" + sNarr + "\nscore " + str.tostring(sScore, "#") + "  ·  " + str.tostring(sRR, "#.#") + "R  ·  SL " + str.tostring(sSL, format.mintick)
-                // Two short lines rather than the four-line narrative that used to
-                // overlap into an unreadable slab, and pushed clear of the candle
-                // so it does not sit on top of the zone boxes or its own triangle.
+                // A flag, not an essay. The reasoning lives in the tooltip, one
+                // hover away, so clustered signals stay readable.
+                // Naming the pool the reward was measured to is the difference
+                // between "3.2R" and "3.2R to the equal highs at 4609" — the
+                // second tells you what has to happen for the trade to work, and
+                // where to expect it to stall if it does not.
+                poolTxt = sDir == 1 ? dolNearAboveName : dolNearBelowName
+                rrTxt = str.tostring(sRR, "#.#") + "R" + (poolAhead and poolTxt != "" ? " to " + poolTxt : "")
+                sTip = sModel + "\n" + sNarr + "\nscore " + str.tostring(sScore, "#") + "  ·  " + rrTxt + "  ·  SL " + str.tostring(sSL, format.mintick) + "\narmed " + str.tostring(bar_index - setup.armBar) + "b ago  ·  vote " + str.tostring(confluenceAgree(sDir)) + "/5"
                 sTxt = (sDir == 1 ? "▲ BUY " : "▼ SELL ") + str.tostring(sScore, "#") + "\n" + sModel
                 array.push(sniperLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 4 : high + tapTol * 4, sTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(sCol, 10), textcolor=color.white, size=size.normal, tooltip=sTip))
                 capLabels(sniperLabelRefs, 60)
                 if riskManagement
                     array.push(riskLevels, createSniperRisk(bar_index, sEntry, sSL, sT1, sT2, sT3, sDir == 1))
                     capRiskLevels()
+            else if bOnly
+                // ── B grade ──
+                // Confirmed at a live array with structure behind it, missed
+                // exactly one armed gate. Scored on the identical stack, drawn
+                // small and dim, and never given a triangle: the marker's job is
+                // to be legible without ever being mistaken for an A+ entry.
+                lastB = takeLong ? lastBTierBarL : lastBTierBarS
+                bCooled = (na(lastB) or bar_index - lastB >= sniperCooldown) and cooled
+                if sScore >= bTierThreshold and sRR >= bTierMinRR and bCooled
+                    if takeLong
+                        lastBTierBarL := bar_index
+                    else
+                        lastBTierBarS := bar_index
+                    bTierCount += 1
+                    missed = takeLong ? firstBlockedGate(gateL) : firstBlockedGate(gateS)
+                    bCol = sDir == 1 ? sniperBullColor : sniperBearColor
+                    bTip = "B grade · " + sModel + "\nmissing gate: " + missed + "\n" + sNarr + "\nscore " + str.tostring(sScore, "#") + "  ·  " + str.tostring(sRR, "#.#") + "R  ·  SL " + str.tostring(sSL, format.mintick)
+                    bTxt = "B " + str.tostring(sScore, "#") + " " + (sDir == 1 ? "▲" : "▼") + "\n" + missed
+                    array.push(bTierLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol * 2 : high + tapTol * 2, bTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(bCol, 55), textcolor=color.white, size=size.small, tooltip=bTip))
+                    capLabels(bTierLabelRefs, 25)
             else
-                // Every gate passed and the setup still did not fire. Recording
-                // why is the point: this is what turns a quiet chart from
-                // "nothing is happening" into "here is what it is waiting for".
+                // Every gate passed, the entry confirmed, and the setup still did
+                // not fire. Recording why is the point: this is what turns a quiet
+                // chart from "nothing is happening" into "here is what it is
+                // waiting for".
+                if sScore < aPlusThreshold
+                    rejScore += 1
+                else if sRR < minSignalRR
+                    rejRR += 1
+                else if not cooled
+                    rejCooldown += 1
+                else if not budgetOK
+                    rejBudget += 1
                 if takeLong
                     watchModelL := sModel
                     watchScoreL := sScore
@@ -3702,9 +3901,7 @@ if canDetect and enableSniper
                     array.push(watchLabelRefs, label.new(bar_index, sDir == 1 ? low - tapTol : high + tapTol, wTxt, style=sDir == 1 ? label.style_label_up : label.style_label_down, color=color.new(watchMarkColor, 45), textcolor=color.white, size=size.tiny))
                     capLabels(watchLabelRefs, 15)
 
-// 8. Nothing to do here beyond drawing their output.
-
-// 9. Draw everything on the last bar only.
+// 8. Draw everything on the last bar only.
 if uiRedraw
     drawFVGs()
     drawZones()
@@ -3726,36 +3923,15 @@ if uiRedraw
 plotshape(sniperFired and sniperDir == 1, title="Sniper BUY", style=shape.triangleup, location=location.belowbar, color=sniperBullColor, size=size.normal)
 plotshape(sniperFired and sniperDir == -1, title="Sniper SELL", style=shape.triangledown, location=location.abovebar, color=sniperBearColor, size=size.normal)
 
-// 10. Generate entry signals (confirmed bars only in non-repainting mode)
-[bullResultEntries, bearResultEntries] = generateEntrySignals()
-
-plotshape(showLegacySignals and array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index), title="Legacy BUY", style=shape.triangleup, location=location.belowbar, color=color.new(buySignalColorInput, 35), size=size.tiny)
-plotshape(showLegacySignals and array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index), title="Legacy SELL", style=shape.triangledown, location=location.abovebar, color=color.new(sellSignalColorInput, 35), size=size.tiny)
-
-// 11. Process entry signals and update risk levels
-drawEntrySignals(bullResultEntries, bearResultEntries)
+// 9. Extend or retire the drawn SL/TP level sets
 if array.size(riskLevels) > 0
     updateRiskManagementLines()
 
-// 12. Update the dashboard
+// 10. Update the dashboard
 updateStatusTable()
 
-// 13. Process alerts
-currentSession = getCurrentSession()
-bullSignalTriggered = array.size(bullEntries) > 0 and array.includes(bullEntries, bar_index)
-bearSignalTriggered = array.size(bearEntries) > 0 and array.includes(bearEntries, bar_index)
-maxPositionsHit = isMaxPositionsReached()
-
+// 11. Process alerts
 if enableAlerts
-    if bullSignalTriggered
-        alert("BUY signal | Session: " + currentSession + " | " + syminfo.ticker, alert.freq_once_per_bar)
-    
-    if bearSignalTriggered
-        alert("SELL signal | Session: " + currentSession + " | " + syminfo.ticker, alert.freq_once_per_bar)
-    
-    if maxPositionsHit
-        alert("Maximum concurrent positions limit reached", alert.freq_once_per_bar)
-
     // CISD is the scout, structure is the confirmation; both are reported so the
     // sequence is visible on the alert feed.
     if bullCISD
