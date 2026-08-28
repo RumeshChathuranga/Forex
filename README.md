@@ -1,4 +1,4 @@
-# Advanced RC Indicator v4.0 — ICT Sniper
+# Advanced RC Indicator v4.1 — ICT Sniper
 
 [![Pine Script](https://img.shields.io/badge/Pine%20Script-v6-2962FF)](https://www.tradingview.com/pine-script-docs/)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen)](LICENSE)
@@ -43,7 +43,7 @@ something needed tuning.
 | **Time** | DST-correct killzones, 20-minute ICT macros, Silver Bullet windows, True Day Open, Judas swing, Power of 3 |
 | **Correlation** | SMT divergence against an auto-selected partner (XAU↔DXY, EURUSD↔GBPUSD, NQ↔SPX, BTC↔ETH) |
 | **Entry engine** | Arm when price reaches an array's entry band, confirm when it turns there — CE reclaim, CISD, structure break or displacement — void when the array fails |
-| **Signal engine** | Nine-gate cascade → weighted stack score → named model, invalidation-based stop, SD/DOL targets |
+| **Signal engine** | Eleven-gate cascade → weighted stack score → named model, invalidation-based stop, SD/DOL targets, first-touch result tracking |
 
 Every threshold is expressed as a **multiple of ATR**, never in points or pips, so the same defaults
 behave identically on gold, FX, indices and crypto. See
@@ -71,7 +71,8 @@ Four settings matter on day one. Leave the rest alone until you have read
 | Setting | Group | Start at | Why |
 |---|---|---|---|
 | **A+ Score Threshold** | Sniper Engine | `50` | The single dial controlling signal frequency. Tune it from the dashboard — see below. |
-| **Sniper Hard Gates** | Sniper Hard Gates | only *Require Valid Structure State* armed | Arming more tightens the engine. Arming all of them will silence it — see the [deadlock warning](docs/TUNING.md#the-gate-deadlock-trap). |
+| **Sniper Hard Gates** | Sniper Hard Gates | *Valid Structure State*, *Directional Confluence* and *Reject Consolidation* armed | Arming more tightens the engine. Arming all the single-factor vetoes will silence it — see the [deadlock warning](docs/TUNING.md#the-gate-deadlock-trap). Confluence is a vote rather than a veto and cannot deadlock. |
+| **Dealing Range Source** | Dealing Range | `HTF Range` | Keeps premium/discount identical across chart timeframes. `Chart Swings` is timeframe-dependent and will make a 3m and a 5m chart disagree. |
 | **Higher Timeframe** | top of the list | one step above your chart | Must actually be *higher* than the chart, or the intermediate-array gate can never pass. |
 | **Redraw Every Tick** | Display Settings | `off` | Off rebuilds the chart twice a bar instead of hundreds of times. Leave it off unless you need intrabar zones. |
 
@@ -101,11 +102,11 @@ Four settings matter on day one. Leave the rest alone until you have read
 
 ## The dashboard
 
-Seven rows, top right. The last three are the important ones.
+Nine rows, top right. The last four are the important ones.
 
 | Row | Shows |
 |---|---|
-| **Header** | Symbol, chart structure, higher-timeframe bias |
+| **Header** | Symbol, chart structure, higher-timeframe bias, and the confluence vote each way |
 | **Killzone** | The most precise live window — macro beats Silver Bullet beats killzone |
 | **Range** | Premium (sell side) or discount (buy side) |
 | **Draw on Liq** | The magnetic target, its price, and distance in ATR |
@@ -113,6 +114,13 @@ Seven rows, top right. The last three are the important ones.
 | **Gates** | What every armed gate has rejected across the **whole chart**, and which gates are armed |
 | **Entries** | The armed-setup lifecycle — what became of every level price actually reached |
 | **Rejects** | What happened to setups that confirmed, cleared every gate and still did not fire |
+| **Result** | What fired signals actually reached — TP1 / TP2 / TP3 / stopped first |
+
+The header reads `Chart ▼ · HTF ▼ · vote ▲1 ▼4`. Chart trend and HTF bias are labelled separately
+because they are different measurements and will legitimately disagree — a 3-minute and a 5-minute
+chart see different structure. The vote is how many of the five directional factors back a long and
+a short respectively; when the two are close to even the market is genuinely conflicted and the
+engine's correct output is no trade.
 
 The Signal row reads one of:
 
@@ -131,17 +139,23 @@ failing one never gets to report itself — that is how a deadlocked pair hides.
 every armed gate over the whole loaded history and makes the real blocker obvious:
 
 ```
-Gates    Struct 5969  ·  Entry 402
+Gates    Struct 5969  ·  Confl 3120  ·  Balance 890  ·  Entry 402
 Entries  armed 1204 → conf 388 · exp 690 · void 126
-Rejects  score 341 · RR 12 · cool 412 · stop 0  |  B 0
+Rejects  score 341 · RR 12 · cool 412 · stop 0 · budget 6  |  B 0
+Result   n 38 · TP1 61% · TP2 34% · TP3 18% · SL 39%
 ```
 
 Every armed gate is listed with what it has rejected, in cascade order, so the row
 doubles as the list of which gates are armed at all.
 
 A gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm.
-A vetoed setup is never scored at all, so no threshold change can rescue it. Full recipes in
-[TUNING.md](docs/TUNING.md).
+A vetoed setup is never scored at all, so no threshold change can rescue it.
+
+**And when the engine is firing but losing, none of the above is the problem.** Read the **Result**
+row: it counts what fired signals actually reached, first-touch and with no assumed management. If
+`SL` dominates while the setup tally is healthy, the engine is picking the wrong *direction* rather
+than the wrong quality, and raising the threshold cannot fix that — a bad trade with a high score is
+still a bad trade. Full recipes in [TUNING.md](docs/TUNING.md).
 
 ---
 

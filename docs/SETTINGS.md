@@ -44,12 +44,17 @@ These decide what fires. Start here.
 | Input | Default | Range | What it does |
 |---|---|---|---|
 | Enable Sniper Engine | `on` | — | The primary signal path. Off leaves the map drawn but silent. |
-| **A+ Score Threshold** | `50` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. |
+| **A+ Score Threshold** | `50` | 40–100 | **The single dial controlling frequency.** Setups clearing every gate but scoring below this become watch markers instead of signals. The scale has a floor — a setup with no supporting evidence still scores above zero — so read the `watch NN` markers on a flat stretch to find where that floor sits in your market before choosing a number. |
 | Show Watch Markers | `on` | — | Tags every near-miss with its score. Keep these on — they are how you calibrate the threshold. |
-| Min Bars Between Signals | `6` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. Counted **per direction**, so a long never mutes a short. |
+| Min Bars Between Signals | `6` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. Counted **per direction**. |
+| **Opposite-Direction Cooldown (x)** | `2.0` | 0–10 | Multiplies the above to mute the *opposite* side after a fire. At `0` the two directions are independent, which lets a BUY and a SELL print on consecutive bars — what a chopping market produces and what no trader would take. |
+| Max A+ Signals per Killzone | `3` | 0–20 | A budget, reset when a new killzone opens. The fourth setup inside one NY AM window is usually the market having stopped trending. `0` disables it. |
 | **Entry Confirm Window (bars)** | `5` | 1–15 | How long a setup stays armed waiting for its confirmation candle. See below. |
+| **Min Confirmation Body (x ATR)** | `0.25` | 0–2 | A confirmation candle has to be a real one. Without this the mean-reclaim trigger accepts any candle closing the right side of the array's 50% line, however small — roughly every other bar on a 3-minute chart. |
 | Max Stop Distance (x ATR) | `1.5` | 0.5–10 | The risk ceiling, and the engine's only anti-chase guard. A confirmation is accepted however far it closes from the array provided the stop it implies fits this budget. Also caps how far a purge wick or Quasimodo head may widen the stop. |
-| Min Reward:Risk to Fire | `1.8` | 0.5–10 | Measured from the invalidation stop to **the best liquidity pool lying in the trade's own direction**. A setup that cannot pay this is refused however well it scores. |
+| Min Reward:Risk to Fire | `1.8` | 0.5–10 | Measured from the invalidation stop to the objective selected below. A setup that cannot pay this is refused however well it scores. |
+| **Reward:Risk Measured To** | `Nearest Pool` | — | `Nearest Pool` measures to the first unswept pool in the trade's direction — the obstacle price must clear before anything beyond it is reachable. `Draw on Liquidity` is the legacy behaviour and measures to the highest-*ranked* pool, which is optimistic whenever something is resting in between: on gold it will name a weekly high thirty points off while an equal-highs cluster sits four points above the entry, crediting a setup with 15R when its realistic objective is 1.5R. |
+| Reward:Risk Target Cap (x ATR) | `10.0` | 1–50 | A backstop on the measured objective, so a daily or weekly level tens of ATR away can never hand an intraday setup a fictional reward. Caps the test only — the drawn TP3 still sits on the real level. |
 
 ### How an entry is triggered
 
@@ -119,11 +124,70 @@ State* is armed by default.
 | Reject Opposing SMT | `off` | No SMT divergence pointing against the trade |
 | Require Draw on Liquidity in Trade Direction | `off` | The draw points the trade's way |
 | Min DOL Room (x ATR) | `2.0` (0.5–20) | And has at least this much room to be worth taking |
+| **Require Directional Confluence** | **`on`** | A majority of the market's own state variables agree with the trade — see below |
+| Min Agreeing Factors | `3` (1–5) | The quorum. The trade must also have more factors for it than against it. |
+| **Reject Consolidation (Balance)** | **`on`** | Price is delivering rather than rotating — **in the middle of the range only** |
+| Regime Lookback (bars) | `20` (5–100) | The window efficiency is measured over |
+| Min Delivery Efficiency | `0.28` (0–1) | Net movement ÷ distance travelled. `0` is pure noise, `1` a straight line; below ~0.25 a market is genuinely rotating. |
+| **Range Edge Band** | `0.30` (0–0.5) | The fraction of the dealing range at each end that counts as an extreme. Inside these bands the consolidation gate stands down. `0` makes it unconditional. |
 
-> ⚠️ **Do not arm every gate.** Nine conditions that must all hold on the same bar multiply out to
+#### Directional confluence — a vote, not a veto
+
+Every other gate here is a veto, and vetoes multiply: arming enough of them to enforce a direction
+deadlocks the engine, which is why all but structure ship disarmed — and why, before this gate
+existed, **nothing enforced a direction at all**. The engine would take a long at the high of a leg
+while its own dashboard reported HTF bias down, chart trend down and the draw above.
+
+Five factors each return *for*, *against*, or abstain when they have no reading:
+
+| Factor | Abstains when |
+|---|---|
+| HTF bias | Bias has not latched |
+| Chart swing trend | Structure is neutral |
+| Draw on liquidity | No qualifying pool |
+| Dealing-range half | No range resolved |
+| Power of 3 phase | Accumulation — the range has not resolved, so it has no opinion |
+
+The trade needs a quorum *and* a plurality, so 3-of-5 with two opposed passes while 2-for-2-against
+never does. Because no single factor can block, there is no pair that can deadlock. The bias row
+prints the live counts as `vote ▲n ▼n`.
+
+#### Delivery regime
+
+Inside a range every array gets tapped, every tap finds a reclaim candle, and the two directions
+confirm alternately — so the engine's signal count **peaks exactly where its edge is worst**. This
+gate measures Kaufman's efficiency ratio directly: how much of the distance price actually travelled
+went anywhere. It is direction-independent — a balancing market is a bad place to take a reversal
+either way round.
+
+**But only in the middle of the range.** Efficiency alone was the wrong test and rejected roughly
+two-thirds of every bar, more than structure and confluence combined. Low efficiency *is* the
+definition of a range being raided: Turtle Soup, the Judas swing and every purge-and-reverse happen
+precisely because price spent the lookback rotating, which is what parks the stops at the edge worth
+running. Applied without regard to where in the range price sits, the gate filtered out the core ICT
+reversal model and kept only continuation entries in moves already delivered.
+
+`Range Edge Band` fixes that. In the outer 30% at each end of the dealing range the gate stands
+down — the range is being tested and the reversal is taken there. Between them it holds. Set it to
+`0` to restore the unconditional behaviour.
+
+**A deep pullback inside a trend also reads as low efficiency**, for the same arithmetic reason — the
+retracement shrinks net displacement while the path keeps growing. Exempting those on a strong
+directional vote was tried and **measurably lost money**: it added 9 signals, none reached TP1, all 9
+hit the stop, and expectancy at 1.8R went from `+0.04R` to `−0.16R`.
+
+The flaw is worth recording, because the idea looks right. The vote is a *state* and efficiency is a
+*bar-level* measure. HTF bias, chart trend, premium/discount and the draw can all hold the same
+reading for hours while price grinds sideways mid-range — which is exactly what this gate exists to
+refuse. Overriding a fast measure with a slow one disables the gate almost permanently whenever the
+market has a persistent lean, and *persistent lean plus mid-range chop* is the worst thing the engine
+can trade. `Range Edge Band` works because it is **positional** and moves with price; a vote is not.
+
+> ⚠️ **Do not arm every gate.** Nine vetoes that must all hold on the same bar multiply out to
 > roughly one qualifying bar in several thousand. Worse, *Require Correct Half of Range* and
 > *Require Valid Structure State* are anti-correlated in a trend and will deadlock each other. See
-> [the gate deadlock trap](TUNING.md#the-gate-deadlock-trap).
+> [the gate deadlock trap](TUNING.md#the-gate-deadlock-trap). The two gates armed by default —
+> confluence and regime — are exempt from this: neither is a single-factor veto.
 
 The disarmed gates are **not discarded** — HTF bias, killzone timing, liquidity, SMT, DOL room and
 premium/discount are all scored by the stack below. They still decide whether a setup is good enough
@@ -195,10 +259,19 @@ The ATR multipliers everything else is measured in.
 |---|---|---|
 | Show Dealing Range | `on` | The high/low/equilibrium frame |
 | Shade Premium / Discount Zones | `on` | The coloured halves |
+| **Dealing Range Source** | `HTF Range` | Where the two edges come from. `Chart Swings` is the legacy behaviour and is **timeframe-dependent by construction**: at the default pivot length a 3-minute chart spans 36 minutes and a 5-minute chart an hour, so the two report *opposite halves* for the same instrument at the same moment — and each then feeds a 12-point stack weight and an optional veto off that contradiction. `HTF Range` resolves the same range on every chart timeframe. `Session Range` uses the current day's high and low. |
+| Dealing Range Timeframe | `60` | Used by `HTF Range` only. Should sit well above your chart: `60` for 3–5m, `240` for 15m–1h. |
+| Dealing Range Length (bars) | `20` (5–100) | How many bars of that timeframe define the range. 20 bars of 1H is a little under a trading day. |
 | Show OTE Band | `on` | 0.62 / 0.705 / 0.79 retracement |
 | Show Standard Deviation Projections | `on` | −0.5 / −1 / −2 standard deviations |
 | Use SD Projections as TP2 / TP3 | `on` | Replaces R-multiples with the leg's own measured objectives |
 | Min Leg Size (x ATR) | `1.0` (0.2–10) | Legs smaller than this produce no OTE band |
+
+The OTE band and the standard-deviation projections are measured from the **chart-local impulse
+leg**, which is tracked separately from the dealing range above. The two used to share one pair of
+numbers, which was only correct while the range was built from chart swings — anchoring the range to
+a higher timeframe would otherwise have turned OTE into an HTF retracement and measured the
+projections off a leg the chart never delivered.
 
 ### Zones (OB / Breaker / Mitigation)
 
@@ -330,6 +403,7 @@ longer offers inputs implying otherwise. What is left is the level set drawn aga
 |---|---|---|---|
 | Show Risk Management Levels | `on` | — | Draws SL, TP1, TP2 and the final objective against each signal |
 | Stop Loss Padding (x ATR) | `0.25` | 0–2 | Buffer beyond the setup's invalidation wick |
+| **Min Stop Distance (x ATR)** | `0.75` | 0.1–3 | A floor on how close the stop may sit to the entry, whatever the setup's own invalidation says. Applied last, so it only ever widens a stop and never pulls one inside the level that would prove the trade wrong. Without it the whole stop is often barely more than the padding — a quarter of one ATR on gold, where a single 5-minute wick routinely runs half of one, so trades are stopped out by noise rather than by being wrong. A stop that tight also inflates the reward:risk it is measured against, so those setups pass a test they should fail. Raise it if the **Result** row shows a high stop-out rate; lower it only if R:R starts refusing setups you would have taken. |
 | **Max Tracked Trades** | `12` | 2–40 | Drawing budget — see below |
 
 **How the levels are derived.**
@@ -377,8 +451,9 @@ and 15 watch markers, and the HTF gap tags are the first thing sacrificed when l
 
 | Input | Default | Notes |
 |---|---|---|
-| Show Status Table | `on` | The dashboard — five rows, or eight with diagnostics on |
-| **Show Gate Diagnostics** | `on` | Adds three rows. **Gates** — how many bars each armed gate has rejected across the loaded history, plus which gates are armed. **Entries** — the armed-setup lifecycle (`armed → conf · exp · void`), which says what became of every level price actually reached. **Rejects** — what happened to setups that confirmed and cleared every gate and still did not fire (`score` / `RR` / `cool` / `stop`, and the B-grade count). Read them in that order. A gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm, and no threshold tuning substitutes for that. |
+| Show Status Table | `on` | The dashboard — five rows, plus three for diagnostics and one for results |
+| **Show Gate Diagnostics** | `on` | Adds three rows. **Gates** — how many bars each armed gate has rejected across the loaded history, plus which gates are armed. **Entries** — the armed-setup lifecycle (`armed → conf · exp · void`), which says what became of every level price actually reached. **Rejects** — what happened to setups that confirmed and cleared every gate and still did not fire (`score` / `RR` / `cool` / `budget`), followed after a slash by `floor`, which is *not* a rejection: it counts confirmed setups whose stop came from the noise floor rather than from their own invalidation. A low `floor` share means stops are already wide, so widening the floor further would change almost nothing — see [the recipe](TUNING.md#signals-fire-but-lose). Read these rows in order; a gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm, and no threshold tuning substitutes for that. |
+| **Show Signal Performance** | `on` | Adds a **Result** row counting what fired signals actually reached: `n · TP1% · TP2% · TP3% · SL%`. First-touch, with no assumed management, so it measures the engine's edge rather than a position-sizing policy — and a bar that touches both a target and the stop is scored as the stop, which keeps the number pessimistic rather than flattering. This is the row that turns tuning from an argument into a measurement: if `SL` dominates while the setup tally is healthy, the engine is picking the wrong *direction*, and raising the threshold will not fix it. |
 | **Redraw Every Tick** | `off` | Off rebuilds drawings twice per bar — once on open, once on close. On rebuilds on every tick, which is the dominant cost in real time. Only needed with Non-Repainting Mode off. |
 | Enable Alerts | `on` | Master switch |
 
