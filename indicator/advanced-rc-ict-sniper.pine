@@ -7,7 +7,7 @@
 // max_bars_back is set explicitly because the zone engine walks back to the
 // origin candle of an impulse leg using a series offset (close[off]), and Pine
 // cannot infer the required history buffer for dynamic offsets on its own.
-indicator("Advanced RC Indicator v4.1 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
+indicator("Advanced RC Indicator v4.2 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
 
 
 
@@ -159,7 +159,7 @@ minSignalRR = input.float(1.8, "Min Reward:Risk to Fire", minval=0.5, maxval=10.
 // is why the reward:risk test never rejected anything.
 rrTargetMode = input.string("Nearest Pool", "Reward:Risk Measured To", options=["Nearest Pool", "Draw on Liquidity"], group=sniperSection, tooltip="Nearest Pool measures to the first unswept pool in the trade's direction — the obstacle price must clear before any further objective is reachable. Draw on Liquidity is the legacy behaviour and measures to the highest-ranked pool, which is optimistic whenever something is resting in between.")
 rrTargetCapATR = input.float(10.0, "Reward:Risk Target Cap (x ATR)", minval=1.0, maxval=50.0, step=0.5, group=sniperSection, tooltip="A backstop on the measured objective, so a daily or weekly level tens of ATR away can never hand an intraday setup a fictional reward. Caps the R:R test only — the drawn TP3 line still sits on the real level.")
-maxSignalsPerKZ = input.int(3, "Max A+ Signals per Killzone", minval=0, maxval=20, group=sniperSection, tooltip="A budget, counted per killzone window and reset when a new one opens. The fourth setup inside one NY AM session is rarely better than the first three and is usually the market ranging. 0 disables the cap.")
+maxSignalsPerKZ = input.int(4, "Max A+ Signals per Killzone", minval=0, maxval=20, group=sniperSection, tooltip="A budget, counted per killzone window and reset when a new one opens. Past a handful, setups inside one NY AM session are rarely better than the first few and are usually the market ranging. 0 disables the cap. Raised from 3 to leave room for continuation entries, which the engine could not take at all until the confluence vote learned to tell a pullback from a reversal.")
 flipCooldownMult = input.float(2.0, "Opposite-Direction Cooldown (x)", minval=0.0, maxval=10.0, step=0.5, group=sniperSection, tooltip="Multiplies Min Bars Between Signals to mute the *opposite* direction after a fire. Cooldowns were per-direction only, so a BUY and a SELL could print on consecutive bars — which is what a chopping market produces and what no trader would take. 0 restores the old independent behaviour.")
 confirmMinBodyATR = input.float(0.25, "Min Confirmation Body (x ATR)", minval=0.0, maxval=2.0, step=0.05, group=sniperSection, tooltip="A confirmation candle has to be a real one. The mean-reclaim trigger previously accepted any candle closing the right side of the array's 50% line, however small — on a 3-minute chart that is roughly every other bar, so a setup at a level was almost guaranteed to confirm within its window.")
 
@@ -230,6 +230,16 @@ wTime = input.float(12.0, "Timing (Macro / Silver Bullet)", minval=0.0, maxval=5
 wDOLRoom = input.float(10.0, "DOL Room & Alignment", minval=0.0, maxval=50.0, step=1.0, group=stackSection)
 wPD = input.float(12.0, "Premium / Discount Half", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Buying discount and selling premium. Scored rather than vetoed: as a hard gate it deadlocked against the structure gate, because in a downtrend price sits in discount — so shorts were refused for being in the wrong half while longs were refused for having no bullish structure.")
 wPO3 = input.float(8.0, "Power of 3 Phase", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="Where in the day's Accumulation / Manipulation / Distribution cycle the setup sits. The manipulation leg — stops harvested, price about to reverse — is where the algorithm wants to fill you. A distribution-phase entry is chasing a move that has already been delivered, and an accumulation-phase entry is guessing which way the range breaks.")
+// The two heaviest discriminators, and until now neither was measured anywhere.
+// "Require Liquidity Taken" ships disarmed as a gate — correctly, since as a veto
+// it silences the engine — but there was no weight to catch it either, so a
+// reversal that ran no stops at all paid nothing for it. And every model scored
+// the same: a full ICT 2022 sequence and a bare touch of a gap were worth
+// identical points. That is the largest single reason the score could not tell a
+// setup that worked from one that did not, and why two-thirds of what fired
+// reached the stop.
+wLiq = input.float(14.0, "Liquidity Taken", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="A purge, Turtle Soup raid or Judas swing in the trade's direction inside the Liquidity Taken window. Reversals that take nothing on the way are the ones that fail, so the absence of it costs almost the whole weight. This is the scored version of the hard gate of the same name — arm that gate instead if you want it to be a veto.")
+wModel = input.float(10.0, "Model Quality", minval=0.0, maxval=50.0, step=1.0, group=stackSection, tooltip="The named setup, on the ICT hierarchy: 2022 Model (the full sequence) > Silver Bullet / Unicorn / Turtle Soup / Judas > Quasimodo > CISD Scout > bare PD Array Tap. The bare tap scores 0.15 — price touching a gap with no liquidity taken and no change in delivery behind it is the most common thing on any chart and the least worth trading.")
 
 // ===== SMT DIVERGENCE =====
 smtSection = "SMT Divergence"
@@ -1105,6 +1115,12 @@ var int rejBudget = 0
 // floor rather than by their own invalidation. See the note at the increment.
 var int floorCount = 0
 var int bTierCount = 0
+// Which family the fired signals came from. Continuations were structurally
+// impossible before the confluence vote learned to tell them apart, so this is
+// the number that says whether unlocking them was the right call — read it
+// against the Result row rather than on its own.
+var int firedCont = 0
+var int firedRev = 0
 // ── Armed-entry lifecycle ──────────────────────────────────────────────────
 // Where setups go once price reaches the level. `expired` (price sat there and
 // never turned) versus `voided` (the array itself failed) versus `confirmed` is
@@ -2175,8 +2191,46 @@ liquidityTaken(int dir) =>
 // reading". Scalar returns throughout rather than a tuple of (for, against):
 // Pine will not let a tuple-returning function be called from inside another
 // function, and both the cascade and the dashboard need these.
-confluencePD() =>
-    na(drEq) ? 0 : inDiscount ? 1 : inPremium ? -1 : 0
+
+// ── Which kind of trade this is, and why the vote has to know ────────────────
+// Two of the five voters below — premium/discount and the draw — describe where
+// price sits, and both of them read backwards on a trend continuation.
+//
+// In a delivered downtrend price is *by definition* in discount, so the PD voter
+// returned +1 and voted against every short; the draw sat on the buy-side pool
+// above, so it voted against too. HTF bias and swing trend voted short, Power of
+// 3 abstained in Accumulation, and the tally came out 2 for and 2 against — one
+// short of the quorum. The engine could not take a continuation in the direction
+// its own bias, trend and structure all agreed on, which is why this gate was the
+// largest blocker in the cascade and why the cleanest trades on a trending day
+// were the ones it refused.
+//
+// A continuation runs with the chart swing trend off a break of structure. A
+// reversal is everything else — the swing event was an MSS or CHoCH, or the trade
+// opposes the trend — and it keeps the original absolute readings, which are
+// correct for it: a reversal short really should be selling premium.
+isContinuation(int dir) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
+    swingTrend == dir and structStateOK(dir) and not (swingFresh and lastStructEvent == "MSS")
+
+// Premium and discount are properties of the leg being retraced, not of a range
+// price has already broken out of. On a reversal the dealing-range half is the
+// right measure and is used unchanged. On a continuation the question is whether
+// this is a discounted entry *into the trend* — a short selling into the upper
+// half of the down leg's retracement — which is what the OTE engine already
+// measures. No reading means abstain: an unresolved leg must never vote against.
+confluencePD(int dir, bool cont) =>
+    if cont
+        if not oteValid or oteDir != dir or na(legHigh) or na(legLow) or legHigh - legLow <= 0
+            0
+        else
+            // Retracement depth into the leg, 0 at the extreme the leg ran to and
+            // 1 back at its origin. Half or deeper is the discounted entry.
+            retr = dir == 1 ? (legHigh - close) / (legHigh - legLow) : (close - legLow) / (legHigh - legLow)
+            retr >= 0.5 ? dir : retr <= 0.2 ? -dir : 0
+    else
+        na(drEq) ? 0 : inDiscount ? 1 : inPremium ? -1 : 0
 
 // Where price sits in the dealing range, 0 at the low edge and 1 at the high.
 // Reuses the range the premium/discount engine already maintains rather than
@@ -2185,8 +2239,36 @@ confluencePD() =>
 rangePos() =>
     na(drHigh) or na(drLow) or drHigh - drLow <= 0 ? 0.5 : (close - drLow) / (drHigh - drLow)
 
-confluenceDOL() =>
-    dolDir != 0 and not na(dolPx) ? dolDir : 0
+// Where price sits inside the current impulse leg, on the same 0-to-1 scale as
+// rangePos() but measured against the leg rather than the dealing range. Used by
+// the regime gate: a pullback at 62-79% of a leg is at *that* structure's edge
+// even when the dealing range calls it mid-range.
+legPos() =>
+    na(legHigh) or na(legLow) or legHigh - legLow <= 0 ? 0.5 : (close - legLow) / (legHigh - legLow)
+
+// The draw only votes when it is still ahead of price. Once price has traded
+// through the ranked pool the draw is history pointing backwards, and letting it
+// keep voting is how a short got a vote against it for a buy-side pool it had
+// already left above.
+//
+// On a continuation the relevant objective is the pool in the trade's own
+// direction rather than the magnetism-ranked one, which is frequently the pool
+// the *previous* leg was delivered to — but it has to be far enough away to be
+// worth trading to. There is nearly always *some* pool in the trend's direction,
+// so without the room test this would return a free +1 on every continuation,
+// and paired with swingTrend (which the continuation classification has already
+// pinned in the trade's favour) that is two automatic votes and a quorum reached
+// on no evidence at all. dolMinRoomATR is the same distance the DOL hard gate
+// uses, so the two agree on what "room" means. Too close is no reading, not a
+// vote against.
+confluenceDOL(int dir, bool cont) =>
+    ranked = dolDir != 0 and not na(dolPx) and (dolDir == 1 ? dolPx > close : dolPx < close) ? dolDir : 0
+    if cont
+        aligned = dir == 1 ? dolAbovePx : dolBelowPx
+        hasRoom = not na(aligned) and (dir == 1 ? aligned > close : aligned < close) and math.abs(aligned - close) >= dolMinRoomATR * volUnit
+        hasRoom ? dir : ranked
+    else
+        ranked
 
 // Accumulation has no directional opinion — the range has not resolved yet — so
 // it abstains rather than voting against both sides.
@@ -2194,11 +2276,13 @@ confluencePO3() =>
     po3Dir != 0 and po3Phase != "Accumulation" ? po3Dir : 0
 
 confluenceAgree(int dir) =>
-    (htfBias == dir ? 1 : 0) + (swingTrend == dir ? 1 : 0) + (confluenceDOL() == dir ? 1 : 0) + (confluencePD() == dir ? 1 : 0) + (confluencePO3() == dir ? 1 : 0)
+    cont = isContinuation(dir)
+    (htfBias == dir ? 1 : 0) + (swingTrend == dir ? 1 : 0) + (confluenceDOL(dir, cont) == dir ? 1 : 0) + (confluencePD(dir, cont) == dir ? 1 : 0) + (confluencePO3() == dir ? 1 : 0)
 
 confluenceAgainst(int dir) =>
     opp = -dir
-    (htfBias == opp ? 1 : 0) + (swingTrend == opp ? 1 : 0) + (confluenceDOL() == opp ? 1 : 0) + (confluencePD() == opp ? 1 : 0) + (confluencePO3() == opp ? 1 : 0)
+    cont = isContinuation(dir)
+    (htfBias == opp ? 1 : 0) + (swingTrend == opp ? 1 : 0) + (confluenceDOL(dir, cont) == opp ? 1 : 0) + (confluencePD(dir, cont) == opp ? 1 : 0) + (confluencePO3() == opp ? 1 : 0)
 
 confluenceOK(int dir) =>
     confluenceAgree(dir) >= minConfluence and confluenceAgree(dir) > confluenceAgainst(dir)
@@ -2391,8 +2475,79 @@ updateArmed(bool cisdUp, bool cisdDn, bool structUp, bool structDn, bool dispUp,
                             array.push(confirmedShort, a)
                     array.remove(armedSetups, i)
 
+// ── Which model has actually formed ─────────────────────────────────────────
+// The engine names the setup rather than emitting a bare number, because "87"
+// tells you nothing about what to do when it goes wrong. The ICT 2022 Model
+// outranks everything else: it is the full sequence — liquidity taken, delivery
+// changed with displacement, entry from the array left behind — and when a
+// Unicorn or a Silver Bullet window is part of that sequence it belongs in the
+// narrative rather than replacing the name.
+//
+// Split out as a scalar so the stack can score off it. Pine will not let a
+// tuple-returning function be called from inside another function, and the
+// narrative-building version below returns two values — so the classification
+// lives here alone and both callers share it. Scoring the model was the point:
+// a full ICT 2022 sequence and a bare tap of a gap used to score identically,
+// which is a large part of why the score could not separate a setup that worked
+// from one that did not.
+sniperModelKey(int dir, string kind) =>
+    dirStr = dir == 1 ? "Bullish" : "Bearish"
+    cisdOK = not na(lastCISDBar) and bar_index - lastCISDBar <= structValidWindow and lastCISDDir == dirStr
+    swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
+    mssOK = swingFresh and lastStructEvent == "MSS"
+    dispFresh = dir == 1 ? (lastDispUpBar >= 0 and bar_index - lastDispUpBar <= dispWindow) : (lastDispDnBar >= 0 and bar_index - lastDispDnBar <= dispWindow)
+    sweepOK = purgedRecently(dir, liqTakenWindow)
+    tsOK = lastTSDir == dirStr and not na(lastTSBar) and bar_index - lastTSBar <= liqTakenWindow
+    jdOK = judasDir == dirStr and not na(judasBar) and bar_index - judasBar <= liqTakenWindow
+    bool qmOK = false
+    for q in qmPatterns
+        if q.active and q.dir == dir and bar_index - q.barIdx <= qmMaxAge
+            qmOK := true
+            break
+    isGap = kind == "FVG" or kind == "HTF FVG"
+
+    string model = "PD Array Tap"
+    if (sweepOK or tsOK or jdOK) and (cisdOK or mssOK) and dispFresh
+        model := "ICT 2022 Model"
+    else if inSilverBullet and isGap
+        model := "Silver Bullet"
+    else if jdOK
+        model := "Judas Swing"
+    else if tsOK
+        model := "Turtle Soup"
+    else if kind == "Unicorn"
+        model := "Unicorn"
+    else if qmOK
+        model := "Quasimodo"
+    else if cisdOK and not mssOK
+        model := "CISD Scout"
+    model
+
+// How much the named model is worth. The ordering is the ICT hierarchy: a full
+// sequence at the top, the named single-condition models in the middle, and a
+// bare array tap — price touched a gap and bounced, with no liquidity taken and
+// no change in delivery behind it — at the bottom, where it belongs.
+scoreModel(string model) =>
+    model == "ICT 2022 Model" ? 1.0 : model == "Silver Bullet" or model == "Unicorn" or model == "Turtle Soup" or model == "Judas Swing" ? 0.8 : model == "Quasimodo" ? 0.6 : model == "CISD Scout" ? 0.4 : 0.15
+
+// Whether stops were actually run before the entry, scored rather than vetoed.
+// This is the single most predictive condition in the ICT model and until now it
+// was in neither the cascade (gateLiq ships disarmed) nor the stack — so a
+// reversal that ran no liquidity at all cost the setup nothing.
+//
+// The floor depends on which trade this is, because the evidence does. A
+// reversal *is* the stop-run: price raids the extreme and turns, and one with
+// nothing taken behind it is the failure case the comment on the hard gate
+// describes — so it pays almost the whole weight. A continuation rests on the
+// trend and the array instead; a pullback into an inverted gap that happens not
+// to have swept a minor high is still the trade, and charging it the reversal's
+// penalty would suppress exactly the setups the confluence fix just unlocked.
+// It is credited when it does sweep, and not punished as hard when it does not.
+scoreLiquidity(int dir, bool cont) =>
+    liquidityTaken(dir) ? 1.0 : cont ? 0.45 : 0.1
+
 // ── Stage B: the weighted stack ─────────────────────────────────────────────
-sniperStack(int dir, int tier, bool fresh) =>
+sniperStack(int dir, int tier, bool fresh, string kind) =>
     dirStr = dir == 1 ? "Bullish" : "Bearish"
     // Recomputed from lastDispUpBar rather than read from dispUpRecent, because
     // that value is produced by the engine section further down the file and
@@ -2455,6 +2610,12 @@ sniperStack(int dir, int tier, bool fresh) =>
     den += wDOLRoom
     num += wPO3 * scorePO3(dir)
     den += wPO3
+    // The two conditions that separate a setup with a thesis from one without,
+    // and neither was measured anywhere until now.
+    num += wLiq * scoreLiquidity(dir, isContinuation(dir))
+    den += wLiq
+    num += wModel * scoreModel(sniperModelKey(dir, kind))
+    den += wModel
 
     math.round(math.max(0.0, math.min(100.0, num / math.max(den, 1.0) * 100.0)), 0)
 
@@ -2483,7 +2644,20 @@ sniperEvaluate(int dir, array<bool> g) =>
     // low-efficiency bar at the top or bottom of the dealing range is the range
     // extreme being tested, which is where the reversal is taken; the same
     // reading in the middle is chop with nothing resting nearby to run.
-    rPos = rangePos()
+    // On a continuation the dealing range is the wrong yardstick. Price that has
+    // broken out and is pulling back sits in the middle of a range it already
+    // left, so the edge-band exemption never applies and the gate rejects the
+    // pullback — which is arithmetically identical to chop, because efficiency
+    // falls during any retracement. The leg is the structure the trade is
+    // actually being taken against, and a pullback into its upper or lower band
+    // *is* an edge. Same test, same band, measured against the right thing.
+    //
+    // Note what this is not: it is positional, it is recomputed from `close`
+    // every bar, and it stops applying the moment the pullback deepens past the
+    // band. That is the property the note below identifies as the reason the
+    // range-edge exemption works and the vote override did not.
+    isCont = isContinuation(dir)
+    rPos = isCont and oteValid and oteDir == dir ? legPos() : rangePos()
     midRange = rPos > regimeEdgeBand and rPos < 1.0 - regimeEdgeBand
     // ── A tried and measured failure: do not add a confluence override here ──
     // The reasoning looked sound. Efficiency is net displacement over path, so
@@ -2519,18 +2693,21 @@ sniperEvaluate(int dir, array<bool> g) =>
     bool entered = false
     int aTier = 0
     bool aFresh = false
+    string aKind = ""
     if dir == 1
         if array.size(confirmedLong) > 0
             c = array.get(confirmedLong, 0)
             entered := true
             aTier := c.tier
             aFresh := c.fresh
+            aKind := c.kind
     else
         if array.size(confirmedShort) > 0
             c = array.get(confirmedShort, 0)
             entered := true
             aTier := c.tier
             aFresh := c.fresh
+            aKind := c.kind
     array.set(g, 0, g0)
     array.set(g, 1, g1)
     array.set(g, 2, g2)
@@ -2549,51 +2726,24 @@ sniperEvaluate(int dir, array<bool> g) =>
     // reversal to trade, and a setup the market's own state variables vote
     // against is not a smaller trade, it is the wrong trade.
     bCandidate = not cascadeOK and entered and enableBTier and failCount == 1 and g4 and g8
-    score = (allPass or bCandidate) ? sniperStack(dir, aTier, aFresh) : 0.0
+    score = (allPass or bCandidate) ? sniperStack(dir, aTier, aFresh, aKind) : 0.0
     [allPass, score, bCandidate]
 
-// ── Which model has actually formed ─────────────────────────────────────────
-// The engine names the setup rather than emitting a bare number, because "87"
-// tells you nothing about what to do when it goes wrong. The ICT 2022 Model
-// outranks everything else: it is the full sequence — liquidity taken, delivery
-// changed with displacement, entry from the array left behind — and when a
-// Unicorn or a Silver Bullet window is part of that sequence it belongs in the
-// narrative rather than replacing the name.
+// ── The label, and the narrative that goes with it ──────────────────────────
+// The name is resolved by sniperModelKey above, which the stack also scores off,
+// so the model shown on the marker and the model the score was computed from can
+// never disagree. Only the prose is built here.
+//
+// The half is read rather than assumed: the old text printed "in Discount" for
+// every long and "in Premium" for every short, which is a restatement of the
+// direction and not an observation about price.
 sniperModelName(int dir, string kind, bool fresh) =>
     dirStr = dir == 1 ? "Bullish" : "Bearish"
-    cisdOK = not na(lastCISDBar) and bar_index - lastCISDBar <= structValidWindow and lastCISDDir == dirStr
-    swingFresh = not na(lastStructBar) and bar_index - lastStructBar <= structValidWindow and lastStructDir == dirStr
-    mssOK = swingFresh and lastStructEvent == "MSS"
-    dispFresh = dir == 1 ? (lastDispUpBar >= 0 and bar_index - lastDispUpBar <= dispWindow) : (lastDispDnBar >= 0 and bar_index - lastDispDnBar <= dispWindow)
-    sweepOK = purgedRecently(dir, liqTakenWindow)
-    tsOK = lastTSDir == dirStr and not na(lastTSBar) and bar_index - lastTSBar <= liqTakenWindow
-    jdOK = judasDir == dirStr and not na(judasBar) and bar_index - judasBar <= liqTakenWindow
-    bool qmOK = false
-    for q in qmPatterns
-        if q.active and q.dir == dir and bar_index - q.barIdx <= qmMaxAge
-            qmOK := true
-            break
-    isGap = kind == "FVG" or kind == "HTF FVG"
+    model = sniperModelKey(dir, kind)
     inOTEBand = oteValid and oteDir == dir and close <= math.max(ote62, ote79) and close >= math.min(ote62, ote79)
-
-    string model = "PD Array Tap"
-    if (sweepOK or tsOK or jdOK) and (cisdOK or mssOK) and dispFresh
-        model := "ICT 2022 Model"
-    else if inSilverBullet and isGap
-        model := "Silver Bullet"
-    else if jdOK
-        model := "Judas Swing"
-    else if tsOK
-        model := "Turtle Soup"
-    else if kind == "Unicorn"
-        model := "Unicorn"
-    else if qmOK
-        model := "Quasimodo"
-    else if cisdOK and not mssOK
-        model := "CISD Scout"
-
+    halfWord = na(drEq) ? "an unresolved range" : inDiscount ? "Discount" : inPremium ? "Premium" : "Equilibrium"
     smtWord = not smtAvailable ? "n/a" : smtDir == dirStr ? "confirmed" : smtDir == "None" ? "aligned" : "opposed"
-    narrative = kind + (fresh ? " fresh" : "") + (inOTEBand ? " + OTE" : "") + " in " + (dir == 1 ? "Discount" : "Premium") + " | " + getActiveWindow() + " | SMT " + smtWord + " | DOL: " + dolName
+    narrative = kind + (fresh ? " fresh" : "") + (inOTEBand ? " + OTE" : "") + " in " + halfWord + " | " + getActiveWindow() + " | SMT " + smtWord + " | DOL: " + dolName
     [model, narrative]
 
 // ── The stop comes from the setup's own invalidation ────────────────────────
@@ -2811,7 +2961,7 @@ updateStatusTable() =>
             // `floor` is not a rejection and is separated from the others by a
             // slash for that reason: it counts confirmed setups whose stop came
             // from the noise floor rather than from their own invalidation.
-            rejTxt = "score " + str.tostring(rejScore) + " · RR " + str.tostring(rejRR) + " · cool " + str.tostring(rejCooldown) + " · budget " + str.tostring(rejBudget) + " / floor " + str.tostring(floorCount) + (enableBTier ? "  |  B " + str.tostring(bTierCount) : "")
+            rejTxt = "score " + str.tostring(rejScore) + " · RR " + str.tostring(rejRR) + " · cool " + str.tostring(rejCooldown) + " · budget " + str.tostring(rejBudget) + " / floor " + str.tostring(floorCount) + (enableBTier ? "  |  B " + str.tostring(bTierCount) : "") + "  |  cont " + str.tostring(firedCont) + " / rev " + str.tostring(firedRev)
             table.cell(dash, 0, 7, "Rejects", text_color=dimText, bgcolor=labelBG, text_size=size.tiny, text_halign=text.align_left)
             table.cell(dash, 1, 7, rejTxt, text_color=dimText, bgcolor=headerBG, text_size=size.tiny, text_halign=text.align_center)
 
@@ -3841,6 +3991,10 @@ if canDetect and enableSniper
                 sniperFired := true
                 signalCount += 1
                 kzSignalCount += 1
+                if isContinuation(sDir)
+                    firedCont += 1
+                else
+                    firedRev += 1
                 sCol = sDir == 1 ? sniperBullColor : sniperBearColor
                 // A flag, not an essay. The reasoning lives in the tooltip, one
                 // hover away, so clustered signals stay readable.

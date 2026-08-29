@@ -48,7 +48,7 @@ These decide what fires. Start here.
 | Show Watch Markers | `on` | — | Tags every near-miss with its score. Keep these on — they are how you calibrate the threshold. |
 | Min Bars Between Signals | `6` | 0–200 | Stops one setup being re-signalled on every bar price spends inside the same array. Counted **per direction**. |
 | **Opposite-Direction Cooldown (x)** | `2.0` | 0–10 | Multiplies the above to mute the *opposite* side after a fire. At `0` the two directions are independent, which lets a BUY and a SELL print on consecutive bars — what a chopping market produces and what no trader would take. |
-| Max A+ Signals per Killzone | `3` | 0–20 | A budget, reset when a new killzone opens. The fourth setup inside one NY AM window is usually the market having stopped trending. `0` disables it. |
+| Max A+ Signals per Killzone | `4` | 0–20 | A budget, reset when a new killzone opens. Past a handful, setups inside one NY AM window are usually the market having stopped trending. `0` disables it. Raised from `3` in v4.2 to leave room for continuation entries. |
 | **Entry Confirm Window (bars)** | `5` | 1–15 | How long a setup stays armed waiting for its confirmation candle. See below. |
 | **Min Confirmation Body (x ATR)** | `0.25` | 0–2 | A confirmation candle has to be a real one. Without this the mean-reclaim trigger accepts any candle closing the right side of the array's 50% line, however small — roughly every other bar on a 3-minute chart. |
 | Max Stop Distance (x ATR) | `1.5` | 0.5–10 | The risk ceiling, and the engine's only anti-chase guard. A confirmation is accepted however far it closes from the array provided the stop it implies fits this budget. Also caps how far a purge wick or Quasimodo head may widen the stop. |
@@ -144,13 +144,35 @@ Five factors each return *for*, *against*, or abstain when they have no reading:
 |---|---|
 | HTF bias | Bias has not latched |
 | Chart swing trend | Structure is neutral |
-| Draw on liquidity | No qualifying pool |
-| Dealing-range half | No range resolved |
+| Draw on liquidity | No qualifying pool, **or the ranked pool is already behind price** |
+| Dealing-range half | No range resolved (continuation: the impulse leg is unresolved) |
 | Power of 3 phase | Accumulation — the range has not resolved, so it has no opinion |
 
 The trade needs a quorum *and* a plurality, so 3-of-5 with two opposed passes while 2-for-2-against
 never does. Because no single factor can block, there is no pair that can deadlock. The bias row
 prints the live counts as `vote ▲n ▼n`.
+
+##### Continuations read the last two factors differently
+
+Two of the five voters describe *where price sits*, and both of them read backwards on a trend
+continuation. In a delivered downtrend price is by definition in **discount**, so the dealing-range
+voter opposed every short; the draw sat on the buy-side pool above, so it opposed too. HTF bias and
+chart trend voted short, Power of 3 abstained — **2 for, 2 against, one short of the quorum.** The
+engine could not take a continuation in the direction its own bias, trend and structure all agreed
+on. This was the largest single blocker in the cascade.
+
+A setup is a **continuation** when it runs with the chart swing trend off a break of structure, and a
+**reversal** otherwise (the swing event was an MSS or CHoCH, or the trade opposes the trend).
+Reversals keep the absolute readings unchanged — a reversal short really should be selling premium.
+Continuations re-base the two location voters:
+
+| Voter | On a continuation |
+|---|---|
+| Dealing-range half | Measured against the **impulse leg** instead: how deep the pullback has retraced. At or past 50% is the discounted entry and votes *for*; shallower than 20% is chasing the extreme and votes *against*; in between it abstains. |
+| Draw on liquidity | Uses the pool in the **trade's own direction** rather than the magnetism-ranked one, and only when it has at least **Min DOL Room** of space. Without the room test there is nearly always *some* pool in the trend's direction, which would hand every continuation a free vote. |
+
+`Min Agreeing Factors` stays at `3` for both families — the quorum was never the problem, the voters
+were. The **Rejects** row reports the split of fired signals as `cont n / rev n`.
 
 #### Delivery regime
 
@@ -183,6 +205,14 @@ refuse. Overriding a fast measure with a slow one disables the gate almost perma
 market has a persistent lean, and *persistent lean plus mid-range chop* is the worst thing the engine
 can trade. `Range Edge Band` works because it is **positional** and moves with price; a vote is not.
 
+The fix that *does* work keeps that property. On a continuation the edge band is measured against the
+**impulse leg** rather than the dealing range — price that has broken out and is pulling back sits
+mid-range in a range it already left, so the exemption could never apply, yet a pullback into the top
+or bottom of its own leg plainly *is* at an edge. Same test, same band, measured against the
+structure the trade is actually being taken against. It is recomputed from `close` every bar and stops
+applying the moment the pullback deepens past the band, which is precisely what the vote override was
+not.
+
 > ⚠️ **Do not arm every gate.** Nine vetoes that must all hold on the same bar multiply out to
 > roughly one qualifying bar in several thousand. Worse, *Require Correct Half of Range* and
 > *Require Valid Structure State* are anti-correlated in a trend and will deadlock each other. See
@@ -201,7 +231,9 @@ is, never whether it is valid. All range 0–50.
 | Input | Default | Rewards |
 |---|---|---|
 | PD Array Quality | `20` | Unicorn > BPR / Breaker > OB / IFVG > Mitigation / Rejection > bare gap |
-| Premium / Discount Half | `12` | Right half of the dealing range; equilibrium scores half |
+| **Liquidity Taken** | **`14`** | A purge, Turtle Soup raid or Judas swing in the trade's direction. A **reversal** with nothing taken behind it scores `0.1` — it is the failure case. A **continuation** scores `0.45`, because its thesis is the trend and the array rather than the raid. |
+| Premium / Discount Half | `12` | Right half of the dealing range; equilibrium scores half. On a **continuation** this is measured against the retracement depth into the impulse leg instead — see [the confluence vote](#directional-confluence). |
+| **Model Quality** | **`10`** | The named setup, on the ICT hierarchy: 2022 Model `1.0` > Silver Bullet / Unicorn / Turtle Soup / Judas `0.8` > Quasimodo `0.6` > CISD Scout `0.4` > bare PD Array Tap `0.15` |
 | Timing (Macro / Silver Bullet) | `12` | Macro > Silver Bullet > killzone > off-hours |
 | CISD + MSS Agreement | `12` | The scout fired *and* the confirmation arrived behind it |
 | OTE Overlap | `10` | Entry sits inside the 0.62–0.79 band |
@@ -215,6 +247,13 @@ is, never whether it is valid. All range 0–50.
 The score is `sum of applicable weights earned ÷ sum of applicable weights × 100`. A factor that
 **cannot apply** — the OTE band when the leg points the other way, SMT when no partner resolves —
 leaves the scale entirely rather than scoring zero against the setup.
+
+**Liquidity Taken** and **Model Quality** are the two heaviest discriminators and neither was
+measured anywhere before v4.2: "Require Liquidity Taken" ships disarmed as a hard gate (correctly —
+as a veto it silences the engine) but there was no weight to catch it either, and every model scored
+identically, so a full ICT 2022 sequence and a bare touch of a gap were worth the same points. Expect
+the observed score distribution to widen at both ends once they are in — read `best X vs Y` on the
+**Signal** row and re-set the A+ threshold from what you actually see rather than from the old scale.
 
 ---
 
@@ -452,7 +491,7 @@ and 15 watch markers, and the HTF gap tags are the first thing sacrificed when l
 | Input | Default | Notes |
 |---|---|---|
 | Show Status Table | `on` | The dashboard — five rows, plus three for diagnostics and one for results |
-| **Show Gate Diagnostics** | `on` | Adds three rows. **Gates** — how many bars each armed gate has rejected across the loaded history, plus which gates are armed. **Entries** — the armed-setup lifecycle (`armed → conf · exp · void`), which says what became of every level price actually reached. **Rejects** — what happened to setups that confirmed and cleared every gate and still did not fire (`score` / `RR` / `cool` / `budget`), followed after a slash by `floor`, which is *not* a rejection: it counts confirmed setups whose stop came from the noise floor rather than from their own invalidation. A low `floor` share means stops are already wide, so widening the floor further would change almost nothing — see [the recipe](TUNING.md#signals-fire-but-lose). Read these rows in order; a gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm, and no threshold tuning substitutes for that. |
+| **Show Gate Diagnostics** | `on` | Adds three rows. **Gates** — how many bars each armed gate has rejected across the loaded history, plus which gates are armed. **Entries** — the armed-setup lifecycle (`armed → conf · exp · void`), which says what became of every level price actually reached. **Rejects** — what happened to setups that confirmed and cleared every gate and still did not fire (`score` / `RR` / `cool` / `budget`), followed after a slash by `floor`, which is *not* a rejection: it counts confirmed setups whose stop came from the noise floor rather than from their own invalidation. The row ends with `cont n / rev n` — the split of *fired* signals between trend continuations and reversals, which is also not a rejection. Read it against the **Result** row: if one family is carrying the losses, that is the one to tighten. A low `floor` share means stops are already wide, so widening the floor further would change almost nothing — see [the recipe](TUNING.md#signals-fire-but-lose). Read these rows in order; a gate holding a five-figure count while the setup tally sits in the dozens is the thing to disarm, and no threshold tuning substitutes for that. |
 | **Show Signal Performance** | `on` | Adds a **Result** row counting what fired signals actually reached: `n · TP1% · TP2% · TP3% · SL%`. First-touch, with no assumed management, so it measures the engine's edge rather than a position-sizing policy — and a bar that touches both a target and the stop is scored as the stop, which keeps the number pessimistic rather than flattering. This is the row that turns tuning from an argument into a measurement: if `SL` dominates while the setup tally is healthy, the engine is picking the wrong *direction*, and raising the threshold will not fix it. |
 | **Redraw Every Tick** | `off` | Off rebuilds drawings twice per bar — once on open, once on close. On rebuilds on every tick, which is the dominant cost in real time. Only needed with Non-Repainting Mode off. |
 | Enable Alerts | `on` | Master switch |

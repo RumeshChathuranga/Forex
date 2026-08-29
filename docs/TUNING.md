@@ -33,11 +33,14 @@ Entries  armed 1204 → conf 388 · exp 690 · void 126
           armed = price got there. conf = price turned there.
           exp = it never turned. void = the array failed.
 
-Rejects  score 6 · RR 4 · cool 5 · stop 3 · budget 2  |  B 41
-         └───────────────────┬──────────────────────┘     └─┬─┘
-          what happened to setups that                  B-grade
-          confirmed, cleared every gate                 setups
-          and still did not fire                        marked
+Rejects  score 6 · RR 4 · cool 5 · budget 2 / floor 3  |  B 41  |  cont 22 / rev 16
+         └───────────────┬──────────────┘   └──┬──┘     └─┬─┘     └────────┬───────┘
+          what happened to setups that      not a      B-grade    which family the
+          confirmed, cleared every gate     reject:    setups     *fired* signals
+          and still did not fire            the stop   marked     came from
+                                            came from
+                                            the noise
+                                            floor
 
 Result   n 38 · TP1 61% · TP2 34% · TP3 18% · SL 39%
          └──────────────────┬───────────────────────┘
@@ -56,6 +59,7 @@ Result   n 38 · TP1 61% · TP2 34% · TP3 18% · SL 39%
 | `731 setups / 0 fired` | Gates fine. The **Rejects** row says whether it is score, R:R, cooldown or stop. |
 | One Gates count dwarfing the rest | That gate is the constraint. Disarm it before touching anything else. |
 | `(armed: …)` listing a gate you did not mean to arm | That is your answer. Only *Require Valid Structure State* is armed by default. |
+| `cont 0 / rev n` on a trending day | Every continuation is being refused. Pre-v4.2 this was structural — see [the continuation blind spot](#the-continuation-blind-spot-fixed-in-v42). |
 
 The Signal row explains one candle; the Gates row explains the chart. When they disagree, trust
 Gates — the Signal row can only ever name the *first* gate that failed, so a gate sitting downstream
@@ -168,8 +172,8 @@ Then, in order:
 2. **Reject Consolidation** (armed by default, min efficiency `0.28`). Inside a range every array
    gets tapped and both directions confirm in turn, so the engine's signal count *peaks* exactly
    where its edge is worst. Raise toward `0.4` to trade only clean expansion.
-3. **Max A+ Signals per Killzone** — `3`. The fourth setup in one NY AM window is usually the market
-   having stopped trending.
+3. **Max A+ Signals per Killzone** — `4`. Past a handful, setups in one NY AM window are usually the
+   market having stopped trending.
 4. **Opposite-Direction Cooldown** — `2`×. Stops a BUY and a SELL printing back to back.
 5. **Min Confirmation Body (x ATR)** — `0.25`. Raise it if setups are confirming on doji-ish candles.
 6. **Min Impulse Leg Size (x ATR)** — `0.6` → `1.0`, which produces far fewer but much stronger
@@ -307,6 +311,27 @@ no pair that can lock the engine — but a setup the market is genuinely split o
 The bias row prints the live counts as `vote ▲n ▼n`, so when the engine is quiet you can see whether
 it is being blocked or whether the market simply has no opinion.
 
+#### The continuation blind spot (fixed in v4.2)
+
+The vote had a structural flaw worth recording, because it is invisible from the settings and it made
+the gate refuse the *best* trades on any trending day.
+
+Two of the five voters describe **where price sits**, and both read backwards on a continuation. In a
+delivered downtrend price is by definition in **discount**, so the dealing-range voter returned "buy"
+and opposed every short. The draw sat on the buy-side pool above, so it opposed too. HTF bias and
+chart trend voted short, Power of 3 abstained in Accumulation — **2 for, 2 against, one short of the
+quorum.** The engine could not take a continuation in the direction its own bias, trend and structure
+all agreed on, and Confluence was consequently the largest blocker in the whole cascade.
+
+The fix is not a lower quorum. `Min Agreeing Factors` stays at `3`; the voters were wrong, not the
+bar. A continuation now measures premium/discount against the **impulse leg it is retracing** rather
+than a range price already broke out of, and reads the draw from the pool in its **own** direction —
+with a `Min DOL Room` requirement, so that pool is not simply a free vote. Reversals are unchanged.
+
+Watch the `cont n / rev n` split on the **Rejects** row against the **Result** row. If continuations
+are the ones losing, raise `Min Agreeing Factors` to `4` or lift **Model Quality** — do not
+re-disable the family wholesale.
+
 ---
 
 ## Chart is slow
@@ -367,7 +392,7 @@ instruments with per-market reasoning, see [PRESETS.md](PRESETS.md).
 | Entry Confirm Window | `4–6` |
 | Min Bars Between Signals | `10` (5m) · `16` (3m) |
 | Structure Valid For (bars) | `12` (5m) · `10` (3m) |
-| Max A+ Signals per Killzone | `3` |
+| Max A+ Signals per Killzone | `4` |
 | Min Impulse Leg Size | `1.0` |
 | Min Reward:Risk | `1.8`, measured to `Nearest Pool` |
 
