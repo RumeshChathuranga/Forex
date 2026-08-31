@@ -106,9 +106,8 @@ straight off the chart. See [TUNING.md](TUNING.md#too-few-signals).
 
 ### Sniper Hard Gates
 
-Each gate is a **veto**: fail it and the setup is not scored at all. *Require Valid Structure State*,
-*Require Directional Confluence*, *Reject Consolidation* and *Require Named Model* are armed by
-default.
+Each gate is a **veto**: fail it and the setup is not scored at all. Only *Require Valid Structure
+State* is armed by default.
 
 | Input | Default | What it requires |
 |---|---|---|
@@ -131,44 +130,6 @@ default.
 | Regime Lookback (bars) | `20` (5–100) | The window efficiency is measured over |
 | Min Delivery Efficiency | `0.28` (0–1) | Net movement ÷ distance travelled. `0` is pure noise, `1` a straight line; below ~0.25 a market is genuinely rotating. |
 | **Range Edge Band** | `0.30` (0–0.5) | The fraction of the dealing range at each end that counts as an extreme. Inside these bands the consolidation gate stands down. `0` makes it unconditional. |
-| **Require Named Model** | **`on`** | The setup matched one of the named ICT models — see below |
-| Min Model Quality | `0.4` (0.15–1) | The floor on the model hierarchy. `0.15` disables the gate; `0.6` also drops CISD Scout. |
-
-#### Model quality — the setup has to be something, not merely somewhere
-
-`PD Array Tap` is not a model. It is the name the classifier returns when every named model failed to
-match: no purge, no Turtle Soup, no Judas, no CISD, no MSS, no Unicorn, no Quasimodo. Price touched a
-gap and bounced.
-
-It was scored and never gated, which made it survivable. A bare tap pays `0.15` on Model Quality and
-`0.1` on Liquidity Taken and still cleared a threshold of 50 on location and clock alone — right half
-of the range, right hour. On a measured XAUUSD 5m session the entire firing population was bare taps
-scoring 50–56 against a best-ever observed score of 78, and it returned **37% to TP1 against 63% to
-the stop**. Scoring a condition only discounts it; some conditions have to be able to say no.
-
-The floor maps onto the same hierarchy as the Model Quality stack weight:
-
-| Model | Score | At `0.4` | At `0.6` |
-|---|---|---|---|
-| ICT 2022 Model | `1.0` | ✅ | ✅ |
-| Silver Bullet · Unicorn · Turtle Soup · Judas Swing | `0.8` | ✅ | ✅ |
-| Quasimodo | `0.6` | ✅ | ✅ |
-| CISD Scout | `0.4` | ✅ | ❌ |
-| **PD Array Tap** | `0.15` | ❌ | ❌ |
-
-Two things follow from where this gate sits in the cascade. It is **index 11, after the entry**,
-because the model cannot be named until a setup confirms — it is classified off the confirmed array's
-kind. And it blocks **B grade as well as A+**: a bare tap demoted to a B marker is still a bare tap
-drawn on the chart, so it is deliberately not one of the gates a B-grade setup is allowed to have
-missed.
-
-Prefer setting the floor to `0.15` over unticking the gate. The Gates row keeps counting what it
-would have blocked either way, and that count — bars where the cascade passed, an entry confirmed,
-and the model was the only thing missing — is the number to read after arming it.
-
-**If the engine goes silent**, that is a result rather than a failure: it says the engine rarely
-assembles a named model. The response is not to lower the floor and carry on, but to check whether
-`Struct` and `Confl` are starving the model detectors upstream.
 
 #### Directional confluence — a vote, not a veto
 

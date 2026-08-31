@@ -21,8 +21,8 @@ blocked: ▲Structure ▼No entry ·  last ▼132b  ·  158 fired / 731 setups �
     first gate that said no, per side     signals fired   cascade passed   ceiling reached
                                                                           vs your threshold
 
-Gates    Struct 5969  ·  Entry 402  ·  Model 96
-         └────────────────┬────────────────┘
+Gates    Struct 5969  ·  Entry 402
+         └────────────┬───────────┘
           every armed gate and what it has rejected, both
           directions, whole history. A gate listed here is
           a gate that is armed.
@@ -83,7 +83,6 @@ The `blocked:` text names the first gate that failed, per direction. Common caus
 | `Liquidity` + `Structure` on opposite sides | **The same deadlock, different pair.** See [below](#the-gate-deadlock-trap). | Disarm *Require Liquidity Taken* — it is off by default and scored by the stack |
 | `HTF Bias` | Bias has not latched yet, or points the other way | Disarm, or shorten HTF Structure Length |
 | `No entry` | Gates pass; no armed setup confirmed on this bar | Read the **Entries** row — it says whether price is failing to reach your levels or failing to turn at them |
-| `Model` | A setup confirmed at a live array but matched no named model — a bare `PD Array Tap` | **Usually working as intended.** These are the setups with no thesis and they were the losing population before the gate existed. If it is blocking *everything*, check whether `Struct` or `Confl` are starving the model detectors upstream. |
 
 ### `N setups / 0 fired` — the score cannot reach the threshold
 
@@ -294,7 +293,7 @@ reason — arming it converts a weighted factor into a veto, and vetoes multiply
 The Gates row is the general cure: any gate whose block count dwarfs the others while the setup tally
 stays near zero is deadlocking, whichever pair is involved.
 
-More generally: eleven gates that must all hold on the same bar multiply out to roughly **one
+More generally: nine gates that must all hold on the same bar multiply out to roughly **one
 qualifying bar in several thousand**. That is not strict, it is off. Premium/discount is scored by
 the stack by default precisely so it can be outvoted rather than holding a veto.
 
