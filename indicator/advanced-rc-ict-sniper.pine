@@ -7,7 +7,7 @@
 // max_bars_back is set explicitly because the zone engine walks back to the
 // origin candle of an impulse leg using a series offset (close[off]), and Pine
 // cannot infer the required history buffer for dynamic offsets on its own.
-indicator("Advanced RC Indicator v4.2 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
+indicator("Advanced RC Indicator v4.3 - ICT Sniper", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500, max_bars_back=500)
 
 
 
@@ -167,12 +167,20 @@ confirmMinBodyATR = input.float(0.25, "Min Confirmation Body (x ATR)", minval=0.
 // Each gate can be switched off individually, and the dashboard checklist always
 // shows which are armed and which are currently passing, so a quiet chart is
 // explainable rather than mysterious.
-// Only two are armed by default. Nine independent conditions that must all hold
-// on the same bar multiply out to roughly one qualifying bar in several
-// thousand, which is not "strict" — it is off. The ones disarmed here are not
-// discarded: HTF bias, killzone, liquidity, SMT and DOL room are all scored by
-// the weighted stack below, so they still decide whether a setup is good enough
-// to fire, they just no longer each hold a veto. Arm more of them to tighten.
+// Four are armed by default — structure, confluence, delivery regime and model
+// quality. Eleven independent conditions that must all hold on the same bar
+// multiply out to roughly one qualifying bar in several thousand, which is not
+// "strict" — it is off. The ones disarmed here are not discarded: HTF bias,
+// killzone, liquidity, SMT and DOL room are all scored by the weighted stack
+// below, so they still decide whether a setup is good enough to fire, they just
+// no longer each hold a veto. Arm more of them to tighten.
+//
+// The four that are armed each refuse a different way of being wrong, which is
+// why they earn a veto where the others do not: no structure shift means no
+// reversal to trade, a market whose own state variables vote against the trade
+// is the wrong trade rather than a smaller one, mid-range rotation is where this
+// engine's signal count peaks and its edge is worst, and a setup matching no
+// named model has no thesis behind it at all.
 gateSection = "Sniper Hard Gates"
 gateHTF = input.bool(false, "Require HTF Bias Alignment", group=gateSection)
 htfBiasTF = input.string("240", "HTF Bias Timeframe", options=["60", "240", "D", "W"], group=gateSection)
@@ -187,6 +195,20 @@ liqTakenWindow = input.int(20, "Liquidity Taken Within (bars)", minval=1, maxval
 gateSMT = input.bool(false, "Reject Opposing SMT Divergence", group=gateSection)
 gateDOL = input.bool(false, "Require Draw on Liquidity in Trade Direction", group=gateSection)
 dolMinRoomATR = input.float(2.0, "Min DOL Room (x ATR)", minval=0.5, maxval=20.0, step=0.5, group=gateSection)
+// ── Model quality ───────────────────────────────────────────────────────────
+// The setup has to be something, not merely somewhere. sniperModelKey() returns
+// "PD Array Tap" only when every named model failed to match — no purge, no
+// Turtle Soup, no Judas, no CISD, no MSS, no Unicorn, no Quasimodo — so that
+// name is precisely the absence of a thesis: price touched a gap and bounced.
+//
+// It was scored and never gated, which meant it was survivable. A bare tap pays
+// 0.15 on Model Quality and 0.1 on Liquidity Taken and still cleared the bar on
+// the strength of location and clock alone — right half of the range, right hour
+// — and those setups were the entire firing population on a measured session
+// that returned 37% to TP1 against 63% to the stop. Scoring a condition only
+// discounts it; some conditions have to be able to say no.
+gateModel = input.bool(true, "Require Named Model", group=gateSection, tooltip="Refuses setups that matched no named model. Armed by default: a bare PD array tap is the most common thing on any chart and the least worth trading, and until this existed it was also the most common thing the engine fired on. Disarm it by setting the floor below to its minimum rather than by unticking this, so the Gates row keeps counting what it would have blocked.")
+minModelScore = input.float(0.4, "Min Model Quality", minval=0.15, maxval=1.0, step=0.05, group=gateSection, tooltip="The floor on the model hierarchy, matching the Model Quality weight in the stack: ICT 2022 Model 1.0 · Silver Bullet / Unicorn / Turtle Soup / Judas 0.8 · Quasimodo 0.6 · CISD Scout 0.4 · bare PD Array Tap 0.15. At 0.4 the bare tap is excluded and nothing else is. At 0.15 the gate is off. Raise to 0.6 to drop CISD Scout as well, which is the next step if 0.4 does not move the Result row.")
 // ── Directional confluence ──────────────────────────────────────────────────
 // The gates above are vetoes, and vetoes multiply: arming enough of them to
 // enforce a direction deadlocks the engine, which is why all but structure ship
@@ -1059,13 +1081,16 @@ var label[] eventLabelRefs = array.new<label>()
 // knowing anything about what the gates are. Index order is the cascade order: 0
 // HTF bias · 1 intermediate array · 2 dealing-range half · 3 killzone · 4
 // structure · 5 liquidity taken · 6 SMT · 7 draw on liquidity · 8 directional
-// confluence · 9 delivery regime · 10 confirmed entry.
+// confluence · 9 delivery regime · 10 confirmed entry · 11 model quality.
 //
-// The entry stays last by construction: everything above it describes the market
-// and can be evaluated on any bar, while the entry is the trigger itself and is
-// only meaningful once the cascade above it has passed.
-var bool[] gateL = array.new_bool(11, false)
-var bool[] gateS = array.new_bool(11, false)
+// Gates 0-9 describe the market and can be evaluated on any bar. The last two
+// cannot, and they are ordered by what each one needs: the entry is the trigger
+// itself and is only meaningful once the cascade above it has passed, and the
+// model can only be named once the entry has confirmed, because it is classified
+// off the confirmed array's kind. Hence model after entry rather than somewhere
+// more natural-looking up in the descriptive block.
+var bool[] gateL = array.new_bool(12, false)
+var bool[] gateS = array.new_bool(12, false)
 // Cooldowns are per direction. Sharing one bar index meant a long muted every
 // short behind it for the whole window, which is not what a cooldown is for: it
 // exists to stop the *same* setup being re-signalled, and an opposing setup is
@@ -1102,8 +1127,8 @@ var int signalCount = 0
 // as gateL / gateS. Every armed gate that failed on a bar is counted, not just
 // the first: the first-failure view is exactly what hid a deadlocked gate pair,
 // because a gate downstream of the blocker never gets to report itself.
-var int[] gateBlockL = array.new_int(11, 0)
-var int[] gateBlockS = array.new_int(11, 0)
+var int[] gateBlockL = array.new_int(12, 0)
+var int[] gateBlockS = array.new_int(12, 0)
 // Why setups that cleared every gate still did not fire. Without these the
 // cascade tally reads "45 setups, 27 fired" and the missing 18 are unexplained.
 var int rejScore = 0
@@ -2547,7 +2572,12 @@ scoreLiquidity(int dir, bool cont) =>
     liquidityTaken(dir) ? 1.0 : cont ? 0.45 : 0.1
 
 // ── Stage B: the weighted stack ─────────────────────────────────────────────
-sniperStack(int dir, int tier, bool fresh, string kind) =>
+// The model arrives already classified rather than being resolved here from the
+// array kind. The cascade has to know the model to gate on it, so resolving it
+// there and passing it down means sniperModelKey() — which walks qmPatterns — is
+// called once per direction per bar instead of twice, and guarantees the gate
+// and the score are talking about the same model.
+sniperStack(int dir, int tier, bool fresh, string model) =>
     dirStr = dir == 1 ? "Bullish" : "Bearish"
     // Recomputed from lastDispUpBar rather than read from dispUpRecent, because
     // that value is produced by the engine section further down the file and
@@ -2614,7 +2644,7 @@ sniperStack(int dir, int tier, bool fresh, string kind) =>
     // and neither was measured anywhere until now.
     num += wLiq * scoreLiquidity(dir, isContinuation(dir))
     den += wLiq
-    num += wModel * scoreModel(sniperModelKey(dir, kind))
+    num += wModel * scoreModel(model)
     den += wModel
 
     math.round(math.max(0.0, math.min(100.0, num / math.max(den, 1.0) * 100.0)), 0)
@@ -2708,6 +2738,21 @@ sniperEvaluate(int dir, array<bool> g) =>
             aTier := c.tier
             aFresh := c.fresh
             aKind := c.kind
+    // Gate 11 is model quality, and it is the one gate that has to sit *after*
+    // the entry rather than before it: the model cannot be named until a setup
+    // has confirmed, because sniperModelKey() classifies off the confirmed
+    // array's kind. Resolved once here and handed to the stack, so the gate and
+    // the score can never disagree about which model this is.
+    string mKey = entered ? sniperModelKey(dir, aKind) : ""
+    // Vacuous with nothing confirmed. A bar that produced no entry has no model
+    // to judge, and failing it there would report the gate as the blocker on
+    // every quiet bar on the chart.
+    //
+    // The epsilon matters because every documented floor sits exactly on a tier
+    // boundary: at 0.4 CISD Scout is meant to pass and does so on equality
+    // alone, so a slider landing on 0.4000000000000001 would silently drop a
+    // whole tier the settings table promises is included.
+    gModel = not gateModel or not entered or scoreModel(mKey) >= minModelScore - 1e-6
     array.set(g, 0, g0)
     array.set(g, 1, g1)
     array.set(g, 2, g2)
@@ -2719,14 +2764,21 @@ sniperEvaluate(int dir, array<bool> g) =>
     array.set(g, 8, g8)
     array.set(g, 9, g9)
     array.set(g, 10, entered)
-    allPass = cascadeOK and entered
+    array.set(g, 11, gModel)
+    allPass = cascadeOK and entered and gModel
     // A B-grade candidate is scored on the identical stack. The grade reflects
     // the missing gate, never a different or softer measurement. Structure and
     // directional confluence are required either way — with no shift there is no
     // reversal to trade, and a setup the market's own state variables vote
     // against is not a smaller trade, it is the wrong trade.
-    bCandidate = not cascadeOK and entered and enableBTier and failCount == 1 and g4 and g8
-    score = (allPass or bCandidate) ? sniperStack(dir, aTier, aFresh, aKind) : 0.0
+    //
+    // Model quality is required too, and for the same reason rather than as a
+    // grading nicety: a bare tap demoted to B is still a bare tap drawn on the
+    // chart, and the point of the gate is that those stop appearing. It is
+    // deliberately not part of failCount — it is a hard block on both grades,
+    // not one of the gates a B-grade setup is allowed to have missed.
+    bCandidate = not cascadeOK and entered and gModel and enableBTier and failCount == 1 and g4 and g8
+    score = (allPass or bCandidate) ? sniperStack(dir, aTier, aFresh, mKey) : 0.0
     [allPass, score, bCandidate]
 
 // ── The label, and the narrative that goes with it ──────────────────────────
@@ -2838,17 +2890,17 @@ capRiskLevels() =>
 
 // When nothing fires, the one thing worth knowing is which gate said no.
 firstBlockedGate(array<bool> g) =>
-    not array.get(g, 0) ? "HTF Bias" : not array.get(g, 1) ? "ITF Array" : not array.get(g, 2) ? "PD Range" : not array.get(g, 3) ? "Killzone" : not array.get(g, 4) ? "Structure" : not array.get(g, 5) ? "Liquidity" : not array.get(g, 6) ? "SMT" : not array.get(g, 7) ? "DOL" : not array.get(g, 8) ? "Confluence" : not array.get(g, 9) ? "Balance" : not array.get(g, 10) ? "No entry" : "—"
+    not array.get(g, 0) ? "HTF Bias" : not array.get(g, 1) ? "ITF Array" : not array.get(g, 2) ? "PD Range" : not array.get(g, 3) ? "Killzone" : not array.get(g, 4) ? "Structure" : not array.get(g, 5) ? "Liquidity" : not array.get(g, 6) ? "SMT" : not array.get(g, 7) ? "DOL" : not array.get(g, 8) ? "Confluence" : not array.get(g, 9) ? "Balance" : not array.get(g, 10) ? "No entry" : not array.get(g, 11) ? "Model" : "—"
 
 // ── Gate diagnostics ───────────────────────────────────────────────────────
 // Short names for the counter row, in cascade index order.
 gateShortName(int i) =>
-    i == 0 ? "HTF" : i == 1 ? "ITF" : i == 2 ? "PD" : i == 3 ? "KZ" : i == 4 ? "Struct" : i == 5 ? "Liq" : i == 6 ? "SMT" : i == 7 ? "DOL" : i == 8 ? "Confl" : i == 9 ? "Balance" : "Entry"
+    i == 0 ? "HTF" : i == 1 ? "ITF" : i == 2 ? "PD" : i == 3 ? "KZ" : i == 4 ? "Struct" : i == 5 ? "Liq" : i == 6 ? "SMT" : i == 7 ? "DOL" : i == 8 ? "Confl" : i == 9 ? "Balance" : i == 10 ? "Entry" : "Model"
 
 // The entry is not a switchable gate — it is the trigger itself and is always
 // required — so index 10 reports as permanently armed.
 gateArmed(int i) =>
-    i == 0 ? gateHTF : i == 1 ? gateITF : i == 2 ? gatePD : i == 3 ? gateKZ : i == 4 ? gateStruct : i == 5 ? gateLiq : i == 6 ? gateSMT : i == 7 ? gateDOL : i == 8 ? gateConfluence : i == 9 ? gateRegime : true
+    i == 0 ? gateHTF : i == 1 ? gateITF : i == 2 ? gatePD : i == 3 ? gateKZ : i == 4 ? gateStruct : i == 5 ? gateLiq : i == 6 ? gateSMT : i == 7 ? gateDOL : i == 8 ? gateConfluence : i == 9 ? gateRegime : i == 10 ? true : gateModel
 
 // Every armed gate and what it has rejected, both directions summed, in cascade
 // order. This is the row that makes a deadlock visible: a gate holding a five-
@@ -2860,7 +2912,7 @@ gateArmed(int i) =>
 // switched on by accident visible without a separate legend.
 gateBlockReport() =>
     string outTxt = ""
-    for i = 0 to 10
+    for i = 0 to 11
         if gateArmed(i)
             c = array.get(gateBlockL, i) + array.get(gateBlockS, i)
             outTxt := outTxt + (outTxt == "" ? "" : "  ·  ") + gateShortName(i) + " " + str.tostring(c)
@@ -3843,6 +3895,15 @@ if canDetect and enableSniper
             array.set(gateBlockL, 10, array.get(gateBlockL, 10) + 1)
         if cascS and not array.get(gateS, 10)
             array.set(gateBlockS, 10, array.get(gateBlockS, 10) + 1)
+        // The model is the same exception one step further along: it is only
+        // meaningful once a setup has actually confirmed, so it is counted on
+        // bars where the cascade passed *and* the entry fired. This count is the
+        // number to read after arming the gate — it is how many bare taps the
+        // engine would otherwise have fired on.
+        if cascL and array.get(gateL, 10) and not array.get(gateL, 11)
+            array.set(gateBlockL, 11, array.get(gateBlockL, 11) + 1)
+        if cascS and array.get(gateS, 10) and not array.get(gateS, 11)
+            array.set(gateBlockS, 11, array.get(gateBlockS, 11) + 1)
     // Both directions confirming at once should not happen — an armed long and
     // an armed short need opposite confirmations on one candle — but if it does,
     // the higher stack score wins rather than the engine firing two opposing

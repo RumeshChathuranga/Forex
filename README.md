@@ -1,4 +1,4 @@
-# Advanced RC Indicator v4.1 — ICT Sniper
+# Advanced RC Indicator v4.3 — ICT Sniper
 
 [![Pine Script](https://img.shields.io/badge/Pine%20Script-v6-2962FF)](https://www.tradingview.com/pine-script-docs/)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen)](LICENSE)
@@ -139,7 +139,7 @@ failing one never gets to report itself — that is how a deadlocked pair hides.
 every armed gate over the whole loaded history and makes the real blocker obvious:
 
 ```
-Gates    Struct 5969  ·  Confl 3120  ·  Balance 890  ·  Entry 402
+Gates    Struct 5969  ·  Confl 3120  ·  Balance 890  ·  Entry 402  ·  Model 96
 Entries  armed 1204 → conf 388 · exp 690 · void 126
 Rejects  score 341 · RR 12 · cool 412 · stop 0 · budget 6  |  B 0
 Result   n 38 · TP1 61% · TP2 34% · TP3 18% · SL 39%
@@ -153,9 +153,14 @@ A vetoed setup is never scored at all, so no threshold change can rescue it.
 
 **And when the engine is firing but losing, none of the above is the problem.** Read the **Result**
 row: it counts what fired signals actually reached, first-touch and with no assumed management. If
-`SL` dominates while the setup tally is healthy, the engine is picking the wrong *direction* rather
-than the wrong quality, and raising the threshold cannot fix that — a bad trade with a high score is
-still a bad trade. Full recipes in [TUNING.md](docs/TUNING.md).
+`SL` dominates while the setup tally is healthy, the engine is picking the wrong *setups* rather than
+too many of them, and raising the threshold cannot fix that — a bad trade with a high score is still
+a bad trade.
+
+The first thing to check is **what the losers were named**. If they are all `PD Array Tap`, they had
+no thesis: price touched a gap and bounced, with no stop-run and no change in delivery behind it.
+That is what *Require Named Model* refuses, and it is armed by default for exactly this reason. Full
+recipes in [TUNING.md](docs/TUNING.md).
 
 ---
 
